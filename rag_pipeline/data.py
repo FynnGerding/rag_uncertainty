@@ -8,8 +8,6 @@ def data(data_name, articles_num):
             break
         texts.append(item["text"])
 
-    print(f"Loaded {len(texts)} documents.")
-
     documents = []
     for text in texts:
         chunks = []

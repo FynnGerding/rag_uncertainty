@@ -1,9 +1,8 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
-from rank_bm25 import BM25Okapi
-import retrieve
 import data
+import retrieve
+import input_query
 
 
 model_name = "Qwen/Qwen-7B"
@@ -22,9 +21,13 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float16
 ).to(device)
 
-documents = data.data("PeterJinGo/wiki-18-corpus", 500)
+documents = data.data("PeterJinGo/wiki-18-corpus", 100)
+bm25 = retrieve.build_bm25(documents)
 
-tokenized_docs = [doc.split() for doc in documents]
+query = input("Question:")
 
-def answer_question(query):
-    pass
+while query != "quit":
+    print(f"Answer: {input_query.answer_question(query, tokenizer, model, bm25, documents, 5)}")
+    query = input("Question:")
+
+print("Bye")

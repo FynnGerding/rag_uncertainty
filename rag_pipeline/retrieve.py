@@ -1,5 +1,15 @@
-def retrieve(query, model, documents, k):
+from rank_bm25 import BM25Okapi
 
-    scores = model.get_scores(query.split())
-    top_results = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
-    return [documents[i] for i in top_results]
+def build_bm25(documents):
+    tokenized_docs = [doc.split() for doc in documents]
+    return BM25Okapi(tokenized_docs)
+
+def retrieve(query, documents, bm25, k):
+    scores = bm25.get_scores(query.split())
+    ranked_indices = scores.argsort()[-k:][::-1]  # top k sorted
+    top_k_documents = []
+
+    for i in ranked_indices:
+        top_k_documents.append(documents[i])
+
+    return top_k_documents
