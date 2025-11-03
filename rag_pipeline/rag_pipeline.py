@@ -5,7 +5,7 @@ import retrieve
 import input_query
 
 
-model_name = "Qwen/Qwen-7B"
+model_name = "gpt2"
 if torch.cuda.is_available():
     device = "cuda"
 elif torch.backends.mps.is_available():
