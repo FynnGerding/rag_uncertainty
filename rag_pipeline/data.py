@@ -1,7 +1,7 @@
 from datasets import load_dataset
 
-def data(data_name, articles_num):
-    dataset = load_dataset(data_name, split="train", streaming=True)
+def data(articles_num):
+    dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
     texts = []
     for i, item in enumerate(dataset):
         if i >= articles_num:

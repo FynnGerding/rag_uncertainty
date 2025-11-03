@@ -13,16 +13,20 @@ elif torch.backends.mps.is_available():
 else:
     device = "cpu"
 
+print("Device chosen")
+
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
+print("tokanizer loaded")
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     trust_remote_code=True,
     torch_dtype=torch.float16
 ).to(device)
-
-documents = data.data("PeterJinGo/wiki-18-corpus", 100)
+print("gpt2 loaded")
+documents = data.data(1)
 bm25 = retrieve.build_bm25(documents)
+
 
 query = input("Question:")
 
