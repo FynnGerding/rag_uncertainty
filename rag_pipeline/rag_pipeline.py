@@ -5,7 +5,7 @@ import retrieve
 import input_query
 
 
-model_name = "gpt2"
+model_name = "Qwen/Qwen2.5-1.5B-Instruct"
 if torch.cuda.is_available():
     device = "cuda"
 elif torch.backends.mps.is_available():
@@ -13,20 +13,30 @@ elif torch.backends.mps.is_available():
 else:
     device = "cpu"
 
-print("Device chosen")
+device = 'cpu'
+print(f'Using device: {device}')
 
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
-print("tokanizer loaded")
+print('Tokenizer loaded successfully')
+
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     trust_remote_code=True,
     torch_dtype=torch.float16
 ).to(device)
-print("gpt2 loaded")
-documents = data.data(1)
+
+print('Model loaded successfully')
+
+documents = data.data("wikimedia/wikipedia", 100)
+
+print(f'Loaded {len(documents)} documents')
+
 bm25 = retrieve.build_bm25(documents)
 
+print('BM25 index built successfully')
+
+print('-'*50)
 
 query = input("Question:")
 
