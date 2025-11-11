@@ -1,7 +1,7 @@
-import retrieve
+import rag_pipeline.retrievers as retrievers
 def answer_question(query, tokenizer, model, bm25, documents, k):
 
-    context = "\n".join(retrieve.retrieve(query, documents, bm25, k))
+    context = "\n".join(retrievers.retrieve(query, documents, bm25, k))
 
     # Build prompt
     prompt = f"""Use the context to answer the user question.

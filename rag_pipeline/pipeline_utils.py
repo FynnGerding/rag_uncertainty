@@ -1,8 +1,8 @@
-import argparse
 import random
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from uncertainty_estimation import semantic_entropy, sum_eigen
+from typing import Any, List
+from tqdm.auto import tqdm
 
 
 def pick_device():
@@ -29,14 +29,35 @@ def load_model_and_tokenizer(model_name: str, device: str):
     ).to(device)
     return tokenizer, model
 
-def build_prompt(question: str, bm25, documents, k: int = 5) -> str:
-    top_docs = bm25.get_top_n(question.split(), documents, n=k)
+
+def _text_from_doc(d: Any) -> str:
+    # Supports plain strings or dicts with a "text" field
+    return d.get("text", d) if isinstance(d, dict) else str(d)
+
+
+def _text_from_hit(hit: Any) -> str:
+    """
+    Works with either:
+      - RetrievedChunk(text=..., meta={"doc": original_doc})
+      - Plain string doc
+      - Dict doc with "text" field
+    """
+    if hasattr(hit, "text"):
+        return str(getattr(hit, "text"))
+    return _text_from_doc(hit)
+
+
+def build_prompt(question: str, retriever, k: int = 5) -> str:
+    """
+    Generic prompt builder that uses any retriever implementing:
+        retriever.search(query: str, top_k: int) -> List[RetrievedChunk or doc]
+    """
+    hits: List[Any] = retriever.search(question, top_k=k)
     context_blocks = []
-    for i, d in enumerate(top_docs, 1):
-        # handle both dict and string docs
-        text = d.get("text", d) if isinstance(d, dict) else str(d)
-        context_blocks.append(f"[{i}] {text}")
-    context = "\n\n".join(context_blocks)
+    for i, h in enumerate(hits, 1):
+        context_blocks.append(f"[{i}] {_text_from_hit(h)}")
+    context = "\n\n".join(context_blocks) if context_blocks else "(no retrieved context)"
+
     return (
         "You are a helpful assistant. Use the context to answer concisely.\n\n"
         f"Context:\n{context}\n\n"
@@ -45,9 +66,16 @@ def build_prompt(question: str, bm25, documents, k: int = 5) -> str:
     )
 
 @torch.no_grad()
-def generate_once(model, tokenizer, prompt: str, device: str,
-                  max_new_tokens: int = 128, temperature: float = 0.9, top_p: float = 0.95,
-                  seed: int | None = None):
+def generate_once(
+    model,
+    tokenizer,
+    prompt: str,
+    device: str,
+    max_new_tokens: int = 128,
+    temperature: float = 0.9,
+    top_p: float = 0.95,
+    seed: int | None = None,
+):
     """
     Returns: text, token_logprobs (list[float])
     """
@@ -71,31 +99,40 @@ def generate_once(model, tokenizer, prompt: str, device: str,
         return_dict_in_generate=True,
     )
 
-    full_text = tokenizer.decode(gen_out.sequences[0], skip_special_tokens=True)
     gen_ids = gen_out.sequences[0][input_len:]
 
-    # compute per-token logprobs
+    # per-token logprobs
     token_logprobs = []
     for step_scores, tok_id in zip(gen_out.scores, gen_ids):
         logprobs = torch.log_softmax(step_scores, dim=-1)
         token_logprobs.append(logprobs[..., tok_id].item())
 
     continuation = tokenizer.decode(gen_ids, skip_special_tokens=True)
-
     return continuation.strip(), token_logprobs
 
 
-def sample_generations(model, tokenizer, question: str, bm25, documents,
-                       k_ctx: int, n: int, max_new_tokens: int = 128,
-                       temperature: float = 0.9, top_p: float = 0.95, base_seed: int = 0):
-    prompt = build_prompt(question, bm25, documents, k=k_ctx)
+def sample_generations(
+    model,
+    tokenizer,
+    question: str,
+    retriever,
+    k_ctx: int,
+    n: int,
+    max_new_tokens: int = 128,
+    temperature: float = 0.9,
+    top_p: float = 0.95,
+    base_seed: int = 0,
+):
+    prompt = build_prompt(question, retriever, k=k_ctx)
     generated_texts = []
     logprobs_per_gen = []
 
-    for i in range(n):
+    for i in tqdm(range(n), desc="generations"):
         seed = None if base_seed is None else (base_seed + i)
         text, token_logprobs = generate_once(
-            model, tokenizer, prompt,
+            model,
+            tokenizer,
+            prompt,
             device=model.device.type,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -105,8 +142,7 @@ def sample_generations(model, tokenizer, question: str, bm25, documents,
         generated_texts.append(text)
         logprobs_per_gen.append(token_logprobs)
 
-    generations_dict = {
+    return {
         "generated_texts": generated_texts,
-        "logprobs": logprobs_per_gen,  # required by SemanticEntropy wrapper
+        "logprobs": logprobs_per_gen,
     }
-    return generations_dict
