@@ -147,7 +147,7 @@ def _rate_fact(
     evidence: List[str],
     rater,
 ) -> str:
-    """Ask rater (HFChatRater or compatible) to check if claim is supported."""
+    """Ask rater to check if claim is supported."""
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())
     prompt = f"""You are a factuality checker.
 Given the QUESTION, ANSWER, and EVIDENCE, classify the CLAIM as one of:
@@ -166,7 +166,7 @@ EVIDENCE:
 {joined_evidence or '(no evidence)'}
 
 Label:"""
-    result = rater.generate(prompt, temperature=0)
+    result, _ = rater.generate(prompt, temperature=0.001)
     return _pick_label(result)
 
 
@@ -175,7 +175,6 @@ def safe_factuality(
         question: str,
         llm,
         *,
-        rater,
         retriever,
         top_k: int = 5,
         per_generation: bool = True,
@@ -204,7 +203,7 @@ def safe_factuality(
                 question=question,
                 answer=answer,
                 evidence=evidence,
-                rater=rater,
+                rater=llm,
             )
 
             if label == SUPPORTED:

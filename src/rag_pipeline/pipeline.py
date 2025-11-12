@@ -3,7 +3,6 @@ import torch
 from rag_pipeline import retrievers
 from rag_pipeline.pipeline_utils import load_model_and_tokenizer, sample_generations
 from rag_pipeline.uncertainty_estimation import semantic_entropy, sum_eigen, safe_factuality
-from rag_pipeline.safe_rater import HFChatRater
 from rag_pipeline import data
 
 if __name__ == "__main__":
@@ -14,15 +13,13 @@ if __name__ == "__main__":
     # load docs (strings or dicts with "text")
     docs = data.data("wikimedia/wikipedia", 100)
 
-    rater = HFChatRater("Qwen/Qwen2.5-1.5B-Instruct", device="cpu")
-
     # Option A: sparse BM25
     retriever = retrievers.BM25Retriever(docs)
 
     # Option B (swap to dense):
     # retriever = retrievers.ContrieverRetriever(docs, model_name="facebook/contriever-msmarco", device=device)
 
-    question = "Who wrote The Old Man and the Sea?"
+    question = "Who was the president of the US in 2000? Tell me something about them."
 
     # sample n generations with logprobs
     generations = sample_generations(
@@ -40,7 +37,7 @@ if __name__ == "__main__":
     # metrics
     se = semantic_entropy(generations, question)
     su = sum_eigen({"generated_texts": generations["generated_texts"]}, question)
-    safe_out = safe_factuality(generations, question, llm, rater=rater, retriever=retriever, top_k=5, per_generation=True)
+    safe_out = safe_factuality(generations, question, llm, retriever=retriever, top_k=5, per_generation=True)
 
 
     print("\nSemantic Entropy:", se["semantic_entropy"], "(truth_value:", se["truth_value"], ")")
