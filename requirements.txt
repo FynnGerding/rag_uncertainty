@@ -17,7 +17,6 @@ babel==2.17.0
 beautifulsoup4==4.14.2
 blackjax==1.2.5
 bleach==6.3.0
--e git+https://github.com/FynnGerding/bnn_initializations_project.git@cdac0046353c6557e66fdaf4aa6bf865dc40c8d0#egg=bnn_initializations_project
 certifi==2025.10.5
 cffi==2.0.0
 cfgv==3.4.0
@@ -213,3 +212,5 @@ xmltodict==1.0.2
 xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
+TruthTorchLM==0.1.17
+spacy==3.8.8

@@ -4,6 +4,67 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from typing import Any, List
 from tqdm.auto import tqdm
 
+import torch, random
+
+class LLM:
+    def __init__(self, model, tokenizer, device="cuda"):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.cache_dict = {}
+
+    @torch.no_grad()
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 128,
+        temperature: float = 0.9,
+        top_p: float = 0.95,
+        seed: int | None = None,
+        return_logprobs: bool = False,
+    ):
+        """
+        Generate text continuation from a prompt using a local LLM.
+        Returns:
+            - continuation (str)
+            - token_logprobs (list[float]) if return_logprobs=True
+        """
+        if seed is not None:
+            random.seed(seed)
+            torch.manual_seed(seed)
+            if self.device == "cuda":
+                torch.cuda.manual_seed_all(seed)
+
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        input_len = inputs["input_ids"].shape[-1]
+
+        gen_out = self.model.generate(
+            **inputs,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            max_new_tokens=max_new_tokens,
+            pad_token_id=self.tokenizer.eos_token_id,
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
+
+        gen_ids = gen_out.sequences[0][input_len:]
+        continuation = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+        if not return_logprobs:
+            return continuation, None
+
+        # per-token logprobs
+        token_logprobs = []
+        for step_scores, tok_id in zip(gen_out.scores, gen_ids):
+            logprobs = torch.log_softmax(step_scores, dim=-1)
+            token_logprobs.append(logprobs[..., tok_id].item())
+
+        return continuation, token_logprobs
+
+    def save_cache(self):
+        pass
 
 def pick_device():
     if torch.cuda.is_available():
@@ -25,9 +86,11 @@ def load_model_and_tokenizer(model_name: str, device: str):
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         trust_remote_code=True,
-        torch_dtype=dtype,
+        dtype=dtype,
     ).to(device)
-    return tokenizer, model
+
+    llm = LLM(model, tokenizer, device)
+    return llm
 
 
 def _text_from_doc(d: Any) -> str:
@@ -65,55 +128,8 @@ def build_prompt(question: str, retriever, k: int = 5) -> str:
         "Answer:"
     )
 
-@torch.no_grad()
-def generate_once(
-    model,
-    tokenizer,
-    prompt: str,
-    device: str,
-    max_new_tokens: int = 128,
-    temperature: float = 0.9,
-    top_p: float = 0.95,
-    seed: int | None = None,
-):
-    """
-    Returns: text, token_logprobs (list[float])
-    """
-    if seed is not None:
-        random.seed(seed)
-        torch.manual_seed(seed)
-        if device == "cuda":
-            torch.cuda.manual_seed_all(seed)
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    input_len = inputs["input_ids"].shape[-1]
-
-    gen_out = model.generate(
-        **inputs,
-        do_sample=True,
-        temperature=temperature,
-        top_p=top_p,
-        max_new_tokens=max_new_tokens,
-        pad_token_id=tokenizer.eos_token_id,
-        output_scores=True,
-        return_dict_in_generate=True,
-    )
-
-    gen_ids = gen_out.sequences[0][input_len:]
-
-    # per-token logprobs
-    token_logprobs = []
-    for step_scores, tok_id in zip(gen_out.scores, gen_ids):
-        logprobs = torch.log_softmax(step_scores, dim=-1)
-        token_logprobs.append(logprobs[..., tok_id].item())
-
-    continuation = tokenizer.decode(gen_ids, skip_special_tokens=True)
-    return continuation.strip(), token_logprobs
-
-
 def sample_generations(
-    model,
-    tokenizer,
+    llm,
     question: str,
     retriever,
     k_ctx: int,
@@ -129,16 +145,15 @@ def sample_generations(
 
     for i in tqdm(range(n), desc="generations"):
         seed = None if base_seed is None else (base_seed + i)
-        text, token_logprobs = generate_once(
-            model,
-            tokenizer,
+        text, token_logprobs = llm.generate(
             prompt,
-            device=model.device.type,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
             seed=seed,
+            return_logprobs=True,
         )
+
         generated_texts.append(text)
         logprobs_per_gen.append(token_logprobs)
 
