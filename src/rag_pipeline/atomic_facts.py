@@ -13,27 +13,8 @@ try:
 except LookupError:
     nltk.download("punkt", quiet=True)
 
-
-_DEFAULT_DEMOS = {
-    "Thierry Henry (born 17 August 1977) is a French professional football coach and former player.": [
-        "Thierry Henry was born on 17 August 1977.",
-        "Thierry Henry is French.",
-        "Thierry Henry is a professional football coach.",
-        "Thierry Henry is a former football player."
-    ],
-    "Marie Curie was a Polish-French physicist and chemist who conducted pioneering research on radioactivity.": [
-        "Marie Curie was Polish-French.",
-        "Marie Curie was a physicist.",
-        "Marie Curie was a chemist.",
-        "Marie Curie conducted pioneering research on radioactivity."
-    ],
-    "Alan Turing was a British mathematician and computer scientist best known for his work on codebreaking during World War II.": [
-        "Alan Turing was British.",
-        "Alan Turing was a mathematician.",
-        "Alan Turing was a computer scientist.",
-        "Alan Turing worked on codebreaking during World War II."
-    ],
-}
+with open("demos.json", "r") as file:
+    _DEMOS = json.load(file)
 
 
 def normalize_answer(s: str) -> str:
@@ -246,7 +227,7 @@ class AtomicFactGenerator:
         assert llm is not None, "An LLM must be provided"
         self.is_bio = bool(is_bio)
         self.llm = llm
-        self.demos = demos or dict(_DEFAULT_DEMOS)
+        self.demos = demos or dict(_DEMOS)
         self.demo_keys = list(self.demos.keys())
         self.nlp = _load_spacy()
         tokenized_corpus = [doc.split(" ") for doc in self.demo_keys]
@@ -312,9 +293,9 @@ class AtomicFactGenerator:
             prompt_parts.append(f"Sentence: {sentence}")
             prompt = "\n".join(prompt_parts).strip() + "\n- "
 
-            print(f'Prompt:\n\n{prompt}')
+            #print(f'Prompt:\n\n{prompt}')
             output, _ = self.llm.generate(prompt)
-            print(f'\nOutput:\n{output}')
+            #print(f'\nOutput:\n{output}')
 
             facts = text_to_sentences(output)
             atoms[sentence] = facts
