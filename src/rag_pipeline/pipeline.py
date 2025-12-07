@@ -1,3 +1,7 @@
+from pathlib import Path
+import csv
+import json
+
 import torch
 
 import retrievers
@@ -5,8 +9,11 @@ from pipeline_utils import load_model_and_tokenizer, sample_generations
 from uncertainty_estimation import semantic_entropy, sum_eigen, safe_factuality
 import data
 from atomic_facts import AtomicFactGenerator
-import csv
-import json
+
+_MODULE_DIR = Path(__file__).resolve().parent
+_QUESTIONS_PATH = _MODULE_DIR / "questions.json"
+_RESULTS_JSON_PATH = Path.cwd() / "results.json"
+_RESULTS_CSV_PATH = Path.cwd() / "results.csv"
 
 
 def pipeline():
@@ -26,7 +33,7 @@ def pipeline():
     # Option B (swap to dense):
     # retriever = retrievers.ContrieverRetriever(docs, model_name="facebook/contriever-msmarco", device=device)
 
-    with open("questions.json", "r", encoding="utf-8") as f:
+    with open(_QUESTIONS_PATH, "r", encoding="utf-8") as f:
         questions_data = json.load(f)
 
     results = []
@@ -92,9 +99,9 @@ def pipeline():
 
                 results.append(record)
 
-    with open(results.json, "w", encoding="utf-8") as f:
+    with open(_RESULTS_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved results.json")
+    print(f"\nSaved {_RESULTS_JSON_PATH}")
 
     if results:
         fieldnames = [
@@ -115,7 +122,7 @@ def pipeline():
             "safe_gen_total_claims",
         ]
 
-        with open("results.csv", "w", newline="", encoding="utf-8") as f:
+        with open(_RESULTS_CSV_PATH, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
 
@@ -139,7 +146,7 @@ def pipeline():
                 }
                 writer.writerow(row)
 
-        print(f"Saved results.csv")
+        print(f"Saved {_RESULTS_CSV_PATH}")
 
 
 if __name__ == "__main__":

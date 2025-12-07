@@ -3,6 +3,7 @@
 import json
 import re
 import string
+from pathlib import Path
 import spacy
 import nltk
 from nltk.tokenize import sent_tokenize as _nltk_sent_tokenize
@@ -13,7 +14,8 @@ try:
 except LookupError:
     nltk.download("punkt", quiet=True)
 
-with open("demos.json", "r") as file:
+_DEMOS_PATH = Path(__file__).resolve().with_name("demos.json")
+with open(_DEMOS_PATH, "r", encoding="utf-8") as file:
     _DEMOS = json.load(file)
 
 
