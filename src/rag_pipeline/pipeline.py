@@ -13,7 +13,64 @@ from atomic_facts import AtomicFactGenerator
 _MODULE_DIR = Path(__file__).resolve().parent
 _QUESTIONS_PATH = _MODULE_DIR / "questions.json"
 _RESULTS_JSON_PATH = Path.cwd() / "results.json"
-_RESULTS_CSV_PATH = Path.cwd() / "results.csv"
+_RESULTS_CSV_PATH = Path.cwd() / "results" / "results.csv"
+
+
+def _write_results_json(records):
+    tmp_path = _RESULTS_JSON_PATH.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+    tmp_path.replace(_RESULTS_JSON_PATH)
+    print(f"Saved {_RESULTS_JSON_PATH} (intermediate)")
+
+
+def _write_results_csv(records):
+    if not records:
+        return
+
+    fieldnames = [
+        "category",
+        "question",
+        "answer",
+        "atomic_facts",
+        "semantic_entropy_global",
+        "semantic_entropy_per_gen",
+        "semantic_entropy_truth_value",
+        "sum_eigen",
+        "sum_eigen_truth_value",
+        "safe_overall_score",
+        "safe_gen_score",
+        "safe_gen_supported",
+        "safe_gen_not_supported",
+        "safe_gen_irrelevant",
+        "safe_gen_total_claims",
+    ]
+
+    tmp_path = _RESULTS_CSV_PATH.with_suffix(".csv.tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in records:
+            row = {
+                "category": rec["category"],
+                "question": rec["question"],
+                "answer": rec["answer"],
+                "atomic_facts": json.dumps(rec["atomic_facts"], ensure_ascii=False),
+                "semantic_entropy_global": rec["semantic_entropy_global"],
+                "semantic_entropy_per_gen": rec["semantic_entropy_per_gen"],
+                "semantic_entropy_truth_value": rec["semantic_entropy_truth_value"],
+                "sum_eigen": rec["sum_eigen"],
+                "sum_eigen_truth_value": rec["sum_eigen_truth_value"],
+                "safe_overall_score": rec["safe_overall_score"],
+                "safe_gen_score": rec["safe_gen_score"],
+                "safe_gen_supported": rec["safe_gen_supported"],
+                "safe_gen_not_supported": rec["safe_gen_not_supported"],
+                "safe_gen_irrelevant": rec["safe_gen_irrelevant"],
+                "safe_gen_total_claims": rec["safe_gen_total_claims"],
+            }
+            writer.writerow(row)
+    tmp_path.replace(_RESULTS_CSV_PATH)
+    print(f"Saved {_RESULTS_CSV_PATH} (intermediate)")
 
 
 def pipeline():
@@ -98,55 +155,14 @@ def pipeline():
                 }
 
                 results.append(record)
+            # Persist after each question so progress can be inspected mid-run
+            _write_results_json(results)
+            _write_results_csv(results)
 
-    with open(_RESULTS_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-    print(f"\nSaved {_RESULTS_JSON_PATH}")
+    print("\nFinished run.")
 
     if results:
-        fieldnames = [
-            "category",
-            "question",
-            "answer",
-            "atomic_facts",
-            "semantic_entropy_global",
-            "semantic_entropy_per_gen",
-            "semantic_entropy_truth_value",
-            "sum_eigen",
-            "sum_eigen_truth_value",
-            "safe_overall_score",
-            "safe_gen_score",
-            "safe_gen_supported",
-            "safe_gen_not_supported",
-            "safe_gen_irrelevant",
-            "safe_gen_total_claims",
-        ]
-
-        with open(_RESULTS_CSV_PATH, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for rec in results:
-                row = {
-                    "category": rec["category"],
-                    "question": rec["question"],
-                    "answer": rec["answer"],
-                    "atomic_facts": json.dumps(rec["atomic_facts"], ensure_ascii=False),
-                    "semantic_entropy_global": rec["semantic_entropy_global"],
-                    "semantic_entropy_per_gen": rec["semantic_entropy_per_gen"],
-                    "semantic_entropy_truth_value": rec["semantic_entropy_truth_value"],
-                    "sum_eigen": rec["sum_eigen"],
-                    "sum_eigen_truth_value": rec["sum_eigen_truth_value"],
-                    "safe_overall_score": rec["safe_overall_score"],
-                    "safe_gen_score": rec["safe_gen_score"],
-                    "safe_gen_supported": rec["safe_gen_supported"],
-                    "safe_gen_not_supported": rec["safe_gen_not_supported"],
-                    "safe_gen_irrelevant": rec["safe_gen_irrelevant"],
-                    "safe_gen_total_claims": rec["safe_gen_total_claims"],
-                }
-                writer.writerow(row)
-
-        print(f"Saved {_RESULTS_CSV_PATH}")
+        print(f"Final outputs saved to {_RESULTS_JSON_PATH} and {_RESULTS_CSV_PATH}")
 
 
 if __name__ == "__main__":
