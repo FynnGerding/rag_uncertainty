@@ -1,13 +1,82 @@
+from pathlib import Path
+import csv
+import json
+
 import torch
 
-from rag_pipeline import retrievers
-from rag_pipeline.pipeline_utils import load_model_and_tokenizer, sample_generations
-from rag_pipeline.uncertainty_estimation import semantic_entropy, sum_eigen, safe_factuality
-from rag_pipeline import data
+import retrievers
+from pipeline_utils import load_model_and_tokenizer, sample_generations
+from uncertainty_estimation import semantic_entropy, sum_eigen, safe_factuality
+import data
+from atomic_facts import AtomicFactGenerator
 
-if __name__ == "__main__":
+_MODULE_DIR = Path(__file__).resolve().parent
+_QUESTIONS_PATH = _MODULE_DIR / "questions.json"
+_RESULTS_JSON_PATH = Path.cwd() / "results.json"
+_RESULTS_CSV_PATH = Path.cwd() / "results" / "results.csv"
+
+
+def _write_results_json(records):
+    tmp_path = _RESULTS_JSON_PATH.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+    tmp_path.replace(_RESULTS_JSON_PATH)
+    print(f"Saved {_RESULTS_JSON_PATH} (intermediate)")
+
+
+def _write_results_csv(records):
+    if not records:
+        return
+
+    fieldnames = [
+        "category",
+        "question",
+        "answer",
+        "atomic_facts",
+        "semantic_entropy_global",
+        "semantic_entropy_per_gen",
+        "semantic_entropy_truth_value",
+        "sum_eigen",
+        "sum_eigen_truth_value",
+        "safe_overall_score",
+        "safe_gen_score",
+        "safe_gen_supported",
+        "safe_gen_not_supported",
+        "safe_gen_irrelevant",
+        "safe_gen_total_claims",
+    ]
+
+    tmp_path = _RESULTS_CSV_PATH.with_suffix(".csv.tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in records:
+            row = {
+                "category": rec["category"],
+                "question": rec["question"],
+                "answer": rec["answer"],
+                "atomic_facts": json.dumps(rec["atomic_facts"], ensure_ascii=False),
+                "semantic_entropy_global": rec["semantic_entropy_global"],
+                "semantic_entropy_per_gen": rec["semantic_entropy_per_gen"],
+                "semantic_entropy_truth_value": rec["semantic_entropy_truth_value"],
+                "sum_eigen": rec["sum_eigen"],
+                "sum_eigen_truth_value": rec["sum_eigen_truth_value"],
+                "safe_overall_score": rec["safe_overall_score"],
+                "safe_gen_score": rec["safe_gen_score"],
+                "safe_gen_supported": rec["safe_gen_supported"],
+                "safe_gen_not_supported": rec["safe_gen_not_supported"],
+                "safe_gen_irrelevant": rec["safe_gen_irrelevant"],
+                "safe_gen_total_claims": rec["safe_gen_total_claims"],
+            }
+            writer.writerow(row)
+    tmp_path.replace(_RESULTS_CSV_PATH)
+    print(f"Saved {_RESULTS_CSV_PATH} (intermediate)")
+
+
+def pipeline():
     # pick device & load model
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    print(device)
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-1.5B-Instruct", device)
 
     # load docs (strings or dicts with "text")
@@ -16,31 +85,85 @@ if __name__ == "__main__":
     # Option A: sparse BM25
     retriever = retrievers.BM25Retriever(docs)
 
+    fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
+
     # Option B (swap to dense):
     # retriever = retrievers.ContrieverRetriever(docs, model_name="facebook/contriever-msmarco", device=device)
 
-    question = "Who was the president of the US in 2000? Tell me something about them."
+    with open(_QUESTIONS_PATH, "r", encoding="utf-8") as f:
+        questions_data = json.load(f)
 
-    # sample n generations with logprobs
-    generations = sample_generations(
-        llm=llm,
-        question=question,
-        retriever=retriever,
-        k_ctx=5,
-        n=5,
-        max_new_tokens=128,
-        temperature=0.9,
-        top_p=0.95,
-        base_seed=0,
-    )
+    results = []
 
-    # metrics
-    se = semantic_entropy(generations, question)
-    su = sum_eigen({"generated_texts": generations["generated_texts"]}, question)
-    safe_out = safe_factuality(generations, question, llm, retriever=retriever, top_k=5, per_generation=True)
+    for category, questions in questions_data.items():
+        for question in questions:
+            print(f"{category}: {question}")
+
+            print("Generation of answers...")
+            generations = sample_generations(
+                llm=llm,
+                question=question,
+                retriever=retriever,
+                k_ctx=5,
+                n=5,
+                max_new_tokens=32,
+                temperature=0.1,
+                top_p=0.95,
+                base_seed=0,
+            )
+
+            print("DONE")
+            print("Building SE and SU...")
+            se = semantic_entropy(generations, question)
+            su = sum_eigen({"generated_texts": generations["generated_texts"]}, question)
+            print("DONE")
+
+            print("Building SAFE...")
+            safe_out = safe_factuality(
+                generations,
+                question,
+                llm,
+                retriever=retriever,
+                fact_gen=fact_gen,
+                top_k=5,
+                per_generation=True)
+
+            print("DONE")
+
+            for gen_id, answer in enumerate(generations["generated_texts"]):
+                gen_info = safe_out["per_generation"][str(gen_id)]
+                details = gen_info["details"]
+                atomic_facts = [d["claim"] for d in details]
+
+                record = {
+                    "category": category,
+                    "question": question,
+                    "answer": answer,
+                    "atomic_facts": atomic_facts,
+                    "safe_details": details,
+                    "semantic_entropy_global": se["semantic_entropy"],
+                    "semantic_entropy_per_gen": se["score_for_each_generation"][gen_id],
+                    "semantic_entropy_truth_value": se["truth_value"],
+                    "sum_eigen": su["U_eigv"],
+                    "sum_eigen_truth_value": su["truth_value"],
+                    "safe_overall_score": safe_out["overall"]["score"],
+                    "safe_gen_score": gen_info["score"],
+                    "safe_gen_supported": gen_info["supported"],
+                    "safe_gen_not_supported": gen_info["not_supported"],
+                    "safe_gen_irrelevant": gen_info["irrelevant"],
+                    "safe_gen_total_claims": gen_info["total_claims"],
+                }
+
+                results.append(record)
+            # Persist after each question so progress can be inspected mid-run
+            _write_results_json(results)
+            _write_results_csv(results)
+
+    print("\nFinished run.")
+
+    if results:
+        print(f"Final outputs saved to {_RESULTS_JSON_PATH} and {_RESULTS_CSV_PATH}")
 
 
-    print("\nSemantic Entropy:", se["semantic_entropy"], "(truth_value:", se["truth_value"], ")")
-    print("Sum Eigen Uncertainty:", su["U_eigv"], "(truth_value:", su["truth_value"], ")")
-
-    print("SAFE factuality score:", safe_out["overall"]["score"])
+if __name__ == "__main__":
+    pipeline()

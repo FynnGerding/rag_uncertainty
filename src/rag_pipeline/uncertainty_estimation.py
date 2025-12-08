@@ -1,9 +1,18 @@
+from pathlib import Path
+import sys
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 from TruthTorchLM.truth_methods.semantic_entropy import SemanticEntropy
 from TruthTorchLM.truth_methods.sum_eigen_uncertainty import SumEigenUncertainty
 
 import third_party
-from rag_pipeline.atomic_facts import AtomicFactGenerator
+from atomic_facts import AtomicFactGenerator
 from typing import Dict, Any, List, Tuple
+import numpy as np
+import torch
 
 def semantic_entropy(generations, question, **kwargs):
     """
@@ -31,7 +40,7 @@ def semantic_entropy(generations, question, **kwargs):
           {
             "truth_value": float,
             "semantic_entropy": float,
-            "score_for_each_generation": List[float],
+             "score_for_each_generation": List[float],
             "generated_texts": List[str],
             "clusters": List[Set[str]],
           }
@@ -41,8 +50,13 @@ def semantic_entropy(generations, question, **kwargs):
     if "logprobs" not in generations:
         raise ValueError('`generations` must contain key "logprobs" for semantic entropy.')
 
-    kwargs.setdefault("entailment_model_device", "cpu")
+    if "entailment_model_device" not in kwargs:
+        if torch.backends.mps.is_available():
+            kwargs["entailment_model_device"] = "mps"
+        else:
+            kwargs["entailment_model_device"] = "cpu"
     se = SemanticEntropy(**kwargs)
+
     # Because sampling is external, we only pass the precomputed dict.
     return se.forward_api(
         model="",
@@ -85,10 +99,15 @@ def sum_eigen(generations, question, **kwargs):
     if "generated_texts" not in generations:
         raise ValueError('`generations` must contain key "generated_texts".')
 
-    kwargs.setdefault("entailment_model_device", "cpu")
-    seu = SumEigenUncertainty(**kwargs)
+    if "entailment_model_device" not in kwargs:
+        if torch.backends.mps.is_available():
+            kwargs["entailment_model_device"] = "mps"
+        else:
+            kwargs["entailment_model_device"] = "cpu"
+    se = SumEigenUncertainty(**kwargs)
+
     # Because sampling is external, we only pass the precomputed dict.
-    return seu.forward_api(
+    return se.forward_api(
         model="",
         messages=[],
         generated_text="",
@@ -176,10 +195,10 @@ def safe_factuality(
         llm,
         *,
         retriever,
+        fact_gen,
         top_k: int = 5,
         per_generation: bool = True,
     ) -> Dict[str, Any]:
-    fact_gen = AtomicFactGenerator(llm=llm)
 
     overall_sup = overall_not = overall_irrel = 0
     per_gen: Dict[str, Any] = {}
@@ -189,7 +208,9 @@ def safe_factuality(
         atomic_pairs, _ = fact_gen.run(answer)
         claims = [c for _, facts in atomic_pairs for c in facts if c and c.strip()]
         # optional: de-dup while preserving order
+        MAX_CLAIMS = 5
         claims = list(dict.fromkeys(claims))
+        claims = claims[:MAX_CLAIMS]
 
         g_sup = g_not = g_irrel = 0
         details = []

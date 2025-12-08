@@ -37,7 +37,7 @@ def data(
     logging.info(f"Loading dataset '{data_name}' (train split, non-streaming)")
 
     try:
-        dataset = load_dataset(data_name, streaming=False, name="20231101.en", split="train[:5%]")
+        dataset = load_dataset(data_name, streaming=False, name="20230401.en", split="train[:5%]")
     except DatasetGenerationError:
         logging.warning("Dataset generation error. Retrying with forced redownload...")
         dataset = load_dataset(data_name, split="train", streaming=False, name="20231101.en", download_mode="force_redownload")
