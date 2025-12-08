@@ -7,13 +7,13 @@ To get started, clone the repository, set up a virtual environment, and install 
 ```bash
 git clone git@github.com:FynnGerding/rag_uncertainty.git
 cd rag_uncertainty
-pip install .
+make setup
 ```
 
 The pipeline can be run as follows:
 
 ```bash
-python src/rag_pipeline/pipeline.py
+make run
 ```
 
 ## Novelty: Context-Delta Claim Uncertainty (CDCU)

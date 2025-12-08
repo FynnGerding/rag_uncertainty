@@ -5,7 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rag_pipeline"
 version = "0.1.0"
-description = "RAG pipeline with uncertainty and SAFE evaluation"
+description = "Uncertainty Evaluation of RAG"
+authors = [
+    {name = "Fynn Gerding", email = "fynn.gerding@ru.nl"},
+    {name = "Piotr Sutkowski", email = "piotr.sutkowski@ru.nl"},
+    {name = "Teun Hanraets", email = "teun.hanraets@ru.nl"},
+]
+
 requires-python = "==3.12.12"
 dependencies = [
     "absl-py==2.3.1",
@@ -214,6 +220,7 @@ dependencies = [
     "virtualenv==20.35.4",
     "wandb==0.22.3",
     "wcwidth==0.2.14",
+    "wikipedia==1.4.0",
     "webcolors==24.11.1",
     "webencodings==0.5.1",
     "websocket-client==1.9.0",
