@@ -25,57 +25,6 @@ def _write_results_json(records):
     tmp_path.replace(_RESULTS_JSON_PATH)
     print(f"Saved {_RESULTS_JSON_PATH} (intermediate)")
 
-
-def _write_results_csv(records):
-    if not records:
-        return
-
-    fieldnames = [
-        "category",
-        "question",
-        "answer",
-        "atomic_facts",
-        "semantic_entropy_global",
-        "semantic_entropy_per_gen",
-        "semantic_entropy_truth_value",
-        "sum_eigen",
-        "sum_eigen_truth_value",
-        "safe_overall_score",
-        "safe_gen_score",
-        "safe_gen_supported",
-        "safe_gen_not_supported",
-        "safe_gen_irrelevant",
-        "safe_gen_total_claims",
-    ]
-
-    tmp_path = _RESULTS_CSV_PATH.with_suffix(".csv.tmp")
-    tmp_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for rec in records:
-            row = {
-                "category": rec["category"],
-                "question": rec["question"],
-                "answer": rec["answer"],
-                "atomic_facts": json.dumps(rec["atomic_facts"], ensure_ascii=False),
-                "semantic_entropy_global": rec["semantic_entropy_global"],
-                "semantic_entropy_per_gen": rec["semantic_entropy_per_gen"],
-                "semantic_entropy_truth_value": rec["semantic_entropy_truth_value"],
-                "sum_eigen": rec["sum_eigen"],
-                "sum_eigen_truth_value": rec["sum_eigen_truth_value"],
-                "safe_overall_score": rec["safe_overall_score"],
-                "safe_gen_score": rec["safe_gen_score"],
-                "safe_gen_supported": rec["safe_gen_supported"],
-                "safe_gen_not_supported": rec["safe_gen_not_supported"],
-                "safe_gen_irrelevant": rec["safe_gen_irrelevant"],
-                "safe_gen_total_claims": rec["safe_gen_total_claims"],
-            }
-            writer.writerow(row)
-    tmp_path.replace(_RESULTS_CSV_PATH)
-    print(f"Saved {_RESULTS_CSV_PATH} (intermediate)")
-
-
 def pipeline():
     # pick device & load model
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
@@ -159,7 +108,6 @@ def pipeline():
 
                 results.append(record)
             _write_results_json(results)
-            _write_results_csv(results)
 
     print("\nFinished run.")
 
