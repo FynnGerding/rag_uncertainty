@@ -23,6 +23,7 @@ dependencies = [
     "rank-bm25==0.2.2",
     "numpy==2.3.4",
     "TruthTorchLM==0.1.17",
+    "bm25s"==0.2.14,
 ]
 
 [tool.setuptools]

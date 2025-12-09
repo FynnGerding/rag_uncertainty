@@ -1,14 +1,15 @@
-# retrievers.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Protocol, List, Optional, Callable, Sequence, Union, Any
+from typing import Protocol, List, Optional, Callable, Sequence, Union
+import logging
+import os
+import bm25s
 
-from rank_bm25 import BM25Okapi
-import torch
-from transformers import AutoTokenizer, AutoModel
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # ---------------------------
-# Common, tiny interface
+# Common Interface
 # ---------------------------
 
 @dataclass
@@ -26,13 +27,18 @@ class Retriever(Protocol):
 
 
 # ---------------------------
-# BM25 retriever (sparse)
+# BM25 Retriever
 # ---------------------------
 
 class BM25Retriever:
     """
-    A thin wrapper around rank_bm25 that implements the Retriever interface.
-    Works with list[str] *or* list[dict] (use text_key for dicts).
+    Sparse retriever using 'bm25s'.
+    Capable of indexing millions of documents in seconds/minutes.
+    
+    Args:
+        documents: List of strings or dicts.
+        text_key: Key to extract text if input is dicts.
+        save_dir: (Optional) If provided, saves the index here to avoid re-indexing.
     """
 
     def __init__(
@@ -40,184 +46,71 @@ class BM25Retriever:
         documents: Sequence[Union[str, dict]],
         *,
         text_key: str = "text",
-        tokenizer: Optional[Callable[[str], List[str]]] = None,
-        ):
-        self._docs = documents
-        self._text_key = text_key
-        self._tok = tokenizer or (lambda s: s.split())
-        self._tokenized_docs = [self._tok(self._get_text(d)) for d in documents]
-        self._bm25 = BM25Okapi(self._tokenized_docs)
-
-    def _get_text(self, d: Union[str, dict]) -> str:
-        return d.get(self._text_key, "") if isinstance(d, dict) else str(d)
-
-    def search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
-        tokens = self._tok(query)
-        scores = self._bm25.get_scores(tokens)  # np.ndarray
-        # top indices descending
-        idxs = scores.argsort()[-top_k:][::-1]
-        out: List[RetrievedChunk] = []
-        for i in idxs:
-            text = self._get_text(self._docs[i])
-            out.append(
-                RetrievedChunk(
-                    text=text,
-                    source_id=str(i),
-                    score=float(scores[i]),
-                    meta={"doc": self._docs[i]},
-                )
-            )
-        return out
-
-
-# ---------------------------
-# Contriever retriever (dense)
-# ---------------------------
-
-class ContrieverRetriever:
-    """
-    Dense retriever using HF 'facebook/contriever' (or contriever-msmarco).
-    - Builds document embeddings once (with batching).
-    - Uses FAISS if available (IP index with normalized embeddings) else torch matmul.
-    - Compatible with list[str] or list[dict] corpora.
-    """
-
-    def __init__(
-        self,
-        documents: Sequence[Union[str, dict]],
-        *,
-        model_name: str = "facebook/contriever",
-        device: Optional[str] = None,          # "cuda" | "mps" | "cpu" (auto if None)
-        text_key: str = "text",
-        batch_size: int = 32,
-        normalize: bool = True,                # L2 normalize for cosine/IP
-        show_progress: bool = True,
+        save_dir: Optional[str] = "bm25_index_cache",
+        load_if_exists: bool = True
     ):
-        self.torch = torch
-        self.AutoTokenizer = AutoTokenizer
-        self.AutoModel = AutoModel
-
+        
         self._docs = documents
         self._text_key = text_key
-        self._batch_size = batch_size
-        self._normalize = normalize
+        
+        # 1. Attempt to Load Cached Index
+        if load_if_exists and save_dir and os.path.exists(save_dir):
+            try:
+                logger.info(f"Loading BM25 index from {save_dir}...")
+                self._retriever = bm25s.BM25.load(save_dir, load_corpus=False)
+                logger.info("Index loaded successfully.")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load cached index: {e}. Re-indexing.")
 
-        # device
-        if device is None:
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-        self._device = device
+        # 2. Extract Text
+        logger.info(f"Extracting text from {len(documents)} documents...")
+        corpus_texts = [self._get_text(d) for d in documents]
 
-        # model
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModel.from_pretrained(model_name).to(self._device)
-        self._model.eval()
+        # 3. Tokenize & Index
+        logger.info("Tokenizing corpus (this may take a moment)...")
+        corpus_tokens = bm25s.tokenize(corpus_texts, stopwords="en", show_progress=True)
 
-        # encode docs
-        self._doc_texts = [self._get_text(d) for d in self._docs]
-        self._embeds = self._encode_texts(self._doc_texts, show_progress=show_progress)  # (N, D)
-
-        # FAISS index (optional)
-        self._faiss = None
-        try:
-            import faiss  # type: ignore
-            self._faiss = faiss
-        except Exception:
-            self._faiss = None
-
-        if self._faiss is not None:
-            # Use inner product; with normalized vectors this is cosine similarity
-            dim = self._embeds.shape[1]
-            if self._normalize:
-                index = self._faiss.IndexFlatIP(dim)
-            else:
-                # If not normalizing, cosine ≠ IP; IP is fine but scales differ.
-                index = self._faiss.IndexFlatIP(dim)
-            index.add(self._embeds.astype("float32"))
-            self._faiss_index = index
-        else:
-            self._faiss_index = None  # fallback to torch matmul
+        logger.info("Building BM25 index...")
+        self._retriever = bm25s.BM25(corpus=None)
+        self._retriever.index(corpus_tokens, show_progress=True)
+        
+        # 4. Save Index
+        if save_dir:
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+                self._retriever.save(save_dir, save_corpus=False)
+                logger.info(f"Saved BM25 index to {save_dir}")
+            except Exception as e:
+                logger.warning(f"Could not save index: {e}")
 
     def _get_text(self, d: Union[str, dict]) -> str:
         return d.get(self._text_key, "") if isinstance(d, dict) else str(d)
 
-    @staticmethod
-    def _mean_pool(last_hidden_state, attention_mask):
-        # standard mean pooling
-        import torch
-        mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-        masked = last_hidden_state * mask
-        summed = masked.sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1e-9)
-        return summed / counts
-
-    def _encode_texts(self, texts: List[str], show_progress: bool = True):
-        import numpy as np
-        from math import ceil
-
-        bs = self._batch_size
-        n = len(texts)
-        n_steps = ceil(n / bs)
-        if show_progress:
-            try:
-                from tqdm.auto import tqdm
-                rng = tqdm(range(n_steps), desc="Encoding docs")
-            except Exception:
-                rng = range(n_steps)
-        else:
-            rng = range(n_steps)
-
-        all_vecs = []
-        with self.torch.no_grad():
-            for step in rng:
-                chunk = texts[step * bs : (step + 1) * bs]
-                toks = self._tokenizer(
-                    chunk, padding=True, truncation=True, return_tensors="pt"
-                ).to(self._device)
-                out = self._model(**toks)
-                vecs = self._mean_pool(out.last_hidden_state, toks["attention_mask"])
-                if self._normalize:
-                    vecs = vecs / (vecs.norm(dim=1, keepdim=True) + 1e-12)
-                all_vecs.append(vecs.cpu())
-        mat = self.torch.cat(all_vecs, dim=0).numpy().astype("float32")  # (N, D)
-        return mat
-
-    def _encode_query(self, query: str):
-        with self.torch.no_grad():
-            toks = self._tokenizer(query, return_tensors="pt", truncation=True).to(self._device)
-            out = self._model(**toks)
-            vec = self._mean_pool(out.last_hidden_state, toks["attention_mask"])
-            if self._normalize:
-                vec = vec / (vec.norm(dim=1, keepdim=True) + 1e-12)
-        return vec.squeeze(0).detach().cpu().numpy().astype("float32")  # (D,)
-
     def search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
-        import numpy as np
-
-        q = self._encode_query(query)  # (D,)
-        if self._faiss_index is not None:
-            D, I = self._faiss_index.search(q.reshape(1, -1), top_k)  # distances, indices
-            idxs = I[0].tolist()
-            scores = D[0].tolist()
-        else:
-            # torch matmul fallback
-            sims = (self._embeds @ q.reshape(-1, 1)).squeeze(-1)  # (N,)
-            idxs = sims.argsort()[-top_k:][::-1].tolist()
-            scores = sims[idxs].tolist()
+        import bm25s
+        
+        query_tokens = bm25s.tokenize(query, stopwords="en")
+        
+        docs, scores = self._retriever.retrieve(
+            query_tokens, 
+            k=top_k, 
+            corpus=self._docs
+        )
+        
+        doc_list = docs[0]
+        score_list = scores[0]
 
         out: List[RetrievedChunk] = []
-        for i, s in zip(idxs, scores):
-            text = self._doc_texts[i]
+        for i, doc_item in enumerate(doc_list):
+            text = self._get_text(doc_item)
+            
             out.append(
                 RetrievedChunk(
                     text=text,
-                    source_id=str(i),
-                    score=float(s),
-                    meta={"doc": self._docs[i]},
+                    source_id=None,
+                    score=float(score_list[i]),
+                    meta={"doc": doc_item},
                 )
             )
         return out

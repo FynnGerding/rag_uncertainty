@@ -12,12 +12,14 @@ from atomic_facts import AtomicFactGenerator
 
 _MODULE_DIR = Path(__file__).resolve().parent
 _QUESTIONS_PATH = _MODULE_DIR / "questions.json"
-_RESULTS_JSON_PATH = Path.cwd() / "results.json"
-_RESULTS_CSV_PATH = Path.cwd() / "results" / "results.csv"
+_RESULTS_DIR = Path.cwd() / "results"
+_RESULTS_JSON_PATH = _RESULTS_DIR / "results.json"
+_RESULTS_CSV_PATH = _RESULTS_DIR / "results.csv"
 
 
 def _write_results_json(records):
     tmp_path = _RESULTS_JSON_PATH.with_suffix(".json.tmp")
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
     tmp_path.replace(_RESULTS_JSON_PATH)
@@ -47,6 +49,7 @@ def _write_results_csv(records):
     ]
 
     tmp_path = _RESULTS_CSV_PATH.with_suffix(".csv.tmp")
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
     with open(tmp_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -80,7 +83,7 @@ def pipeline():
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-1.5B-Instruct", device)
 
     # load docs (strings or dicts with "text")
-    docs = data.data("wikimedia/wikipedia", 100)
+    docs = data.data("wikimedia/wikipedia")
 
     # Option A: sparse BM25
     retriever = retrievers.BM25Retriever(docs)
@@ -155,7 +158,6 @@ def pipeline():
                 }
 
                 results.append(record)
-            # Persist after each question so progress can be inspected mid-run
             _write_results_json(results)
             _write_results_csv(results)
 
