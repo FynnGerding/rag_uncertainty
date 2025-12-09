@@ -14,6 +14,11 @@ try:
 except LookupError:
     nltk.download("punkt", quiet=True)
 
+try:
+    nltk.data.find("tokenizers/punkt_tab")
+except LookupError:
+    nltk.download("punkt_tab", quiet=True)
+
 _DEMOS_PATH = Path(__file__).resolve().with_name("demos.json")
 with open(_DEMOS_PATH, "r", encoding="utf-8") as file:
     _DEMOS = json.load(file)
