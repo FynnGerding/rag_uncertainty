@@ -76,7 +76,7 @@ def _write_results_csv(records):
 def pipeline():
     # pick device & load model
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-    print(device)
+    print(f'Using device: {device}')
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-1.5B-Instruct", device)
 
     # load docs (strings or dicts with "text")

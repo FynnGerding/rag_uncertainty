@@ -36,11 +36,12 @@ def data(
     random.seed(seed)
     logging.info(f"Loading dataset '{data_name}' (train split, non-streaming)")
 
+    target_name = '20231101.en'
     try:
-        dataset = load_dataset(data_name, streaming=False, name="20230401.en", split="train[:5%]")
+        dataset = load_dataset(data_name, streaming=False, name=target_name, split="train")
     except DatasetGenerationError:
         logging.warning("Dataset generation error. Retrying with forced redownload...")
-        dataset = load_dataset(data_name, split="train", streaming=False, name="20231101.en", download_mode="force_redownload")
+        dataset = load_dataset(data_name, split="train", streaming=False, name=target_name, download_mode="force_redownload")
     except Exception as e:
         logging.error(f"Failed to load dataset '{data_name}': {e}")
         return []
