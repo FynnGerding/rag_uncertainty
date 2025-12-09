@@ -79,7 +79,7 @@ class BM25Retriever:
         if save_dir:
             try:
                 os.makedirs(save_dir, exist_ok=True)
-                self._retriever.save(save_dir, save_corpus=False)
+                self._retriever.save(save_dir)
                 logger.info(f"Saved BM25 index to {save_dir}")
             except Exception as e:
                 logger.warning(f"Could not save index: {e}")
