@@ -31,16 +31,14 @@ def pipeline():
     print(f'Using device: {device}')
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-7B-Instruct", device)
 
-    # load docs (strings or dicts with "text")
-    docs = data.data("wikimedia/wikipedia")
-
-    # Option A: sparse BM25
-    retriever = retrievers.BM25Retriever(docs)
+    # build retriever (handles cached index/data internally)
+    retriever = retrievers.build_wikipedia_retriever(
+        data_loader=data.data,
+        cache_dir="bm25_index_cache",
+        data_cache_dir="data",
+    )
 
     fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
-
-    # Option B (swap to dense):
-    # retriever = retrievers.ContrieverRetriever(docs, model_name="facebook/contriever-msmarco", device=device)
 
     with open(_QUESTIONS_PATH, "r", encoding="utf-8") as f:
         questions_data = json.load(f)
