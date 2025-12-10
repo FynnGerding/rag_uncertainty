@@ -64,15 +64,9 @@ class BM25Retriever:
             try:
                 logger.info(f"Loading BM25 index from {save_dir}...")
                 self._retriever = bm25s.BM25.load(save_dir, load_corpus=False)
+                # When loading from an existing index, assume the caller supplies docs if needed.
                 if self._docs is None:
-                    cached_docs = self._load_corpus_from_cache(save_dir)
-                    if cached_docs is None:
-                        raise ValueError("Corpus cache missing; provide documents to align with BM25 index.")
-                    self._docs = cached_docs
-                else:
-                    corpus_cache = self._corpus_cache_path(save_dir)
-                    if not os.path.exists(corpus_cache):
-                        self._save_corpus_to_cache(save_dir, [self._get_text(d) for d in self._docs])
+                    logger.info("Loaded BM25 index; using provided docs=None (index assumed self-contained).")
                 logger.info("Index loaded successfully.")
                 return
             except Exception as e:
@@ -97,7 +91,6 @@ class BM25Retriever:
             try:
                 os.makedirs(save_dir, exist_ok=True)
                 self._retriever.save(save_dir)
-                self._save_corpus_to_cache(save_dir, corpus_texts)
                 logger.info(f"Saved BM25 index to {save_dir}")
             except Exception as e:
                 logger.warning(f"Could not save index: {e}")
@@ -105,39 +98,7 @@ class BM25Retriever:
     def _get_text(self, d: Union[str, dict]) -> str:
         return d.get(self._text_key, "") if isinstance(d, dict) else str(d)
 
-    def _corpus_cache_path(self, save_dir: str) -> str:
-        return os.path.join(save_dir, "corpus.jsonl")
-
-    def _save_corpus_to_cache(self, save_dir: str, corpus_texts: Sequence[str]) -> None:
-        try:
-            path = self._corpus_cache_path(save_dir)
-            with open(path, "w", encoding="utf-8") as f:
-                for text in corpus_texts:
-                    f.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
-            logger.info(f"Saved corpus cache to {path}")
-        except Exception as e:
-            logger.warning(f"Could not save corpus cache: {e}")
-
-    def _load_corpus_from_cache(self, save_dir: str) -> Optional[List[str]]:
-        path = self._corpus_cache_path(save_dir)
-        if not os.path.exists(path):
-            return None
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                corpus = []
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        item = json.loads(line)
-                        corpus.append(item.get("text", line))
-                    except json.JSONDecodeError:
-                        corpus.append(line)
-                return corpus
-        except Exception as e:
-            logger.warning(f"Could not load corpus cache: {e}")
-            return None
+    # Note: corpus caching removed for leaner IO; index loading assumes caller provides docs when needed.
 
     def search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
         import bm25s
@@ -220,25 +181,24 @@ def build_wikipedia_retriever(
     data_cache_dir: str = DEFAULT_DATA_CACHE_DIR,
 ) -> BM25Retriever:
     """
-    Build a BM25 retriever for Wikipedia chunks, preferring cached index/corpus, then cached dataset, otherwise downloading via data_loader.
+    Build a BM25 retriever for Wikipedia chunks:
+    1) If an index exists, load it using docs from cache (first JSON in data).
+    2) Otherwise, use cached dataset JSON, else download via data_loader, then build & save index.
     """
     dataset_name = DEFAULT_WIKI_DATASET
     cache_path = Path(cache_dir)
-    corpus_cache = cache_path / "corpus.jsonl"
+    index_exists = cache_path.exists()
 
-    # 1) If both index and corpus cache exist, load immediately
-    if cache_path.exists() and corpus_cache.exists():
-        try:
-            return BM25Retriever(None, save_dir=cache_dir, load_if_exists=True)
-        except Exception as e:
-            logger.info(f"Cached index + corpus failed to load, falling back to rebuild: {e}")
-
-    # 2) Try to recover docs from corpus cache or dataset cache
+    # Load docs from first JSON cache if available
     docs = _load_corpus_cache(data_cache_dir=data_cache_dir)
     if docs is None:
         docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)
 
-    # 3) If still none, fetch via loader
+    if index_exists:
+        # Use cached index with available docs (may be None if truly self-contained)
+        return BM25Retriever(docs, save_dir=cache_dir, load_if_exists=True)
+
+    # No index: ensure docs exist, otherwise download
     if docs is None:
         if data_loader is None:
             try:
@@ -249,5 +209,5 @@ def build_wikipedia_retriever(
         logger.info(f"Downloading/preparing dataset {dataset_name}...")
         docs = data_loader(dataset_name)
 
-    # 4) Build retriever; if index exists without corpus, this will load the index and write corpus cache
-    return BM25Retriever(docs, save_dir=cache_dir, load_if_exists=True)
+    # Build new index (saves index only; data caching handled by data_loader)
+    return BM25Retriever(docs, save_dir=cache_dir, load_if_exists=False)
