@@ -91,8 +91,6 @@ class BM25Retriever:
     def _get_text(self, d: Union[str, dict]) -> str:
         return d.get(self._text_key, "") if isinstance(d, dict) else str(d)
 
-    # Note: corpus caching removed for leaner IO; index loading assumes caller provides docs when needed.
-
     def search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
         import bm25s
         
@@ -120,52 +118,6 @@ class BM25Retriever:
                 )
             )
         return out
-
-# Helpers for cached loading/building
-
-def _decode_jsonl_texts(path: Path) -> List[str]:
-    texts: List[str] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                item = json.loads(line)
-                texts.append(item.get("text", line))
-            except json.JSONDecodeError:
-                texts.append(line)
-    return texts
-
-
-def _load_corpus_cache(data_cache_dir: str = DEFAULT_DATA_CACHE_DIR) -> Optional[List[str]]:
-    """
-    Try to load a cached corpus from the data directory by taking the first *.json* file found.
-    """
-    base = Path(data_cache_dir)
-    json_files = sorted(p for p in base.glob("*.json*") if p.is_file())
-    if not json_files:
-        return None
-    path = json_files[0]
-    try:
-        return _decode_jsonl_texts(path)
-    except Exception as e:
-        logger.warning(f"Failed to load cached corpus {path}: {e}")
-        return None
-
-
-def _load_dataset_cache(dataset_name: str, data_cache_dir: str = DEFAULT_DATA_CACHE_DIR) -> Optional[List[str]]:
-    pattern = Path(data_cache_dir) / f"{dataset_name.replace('/', '_')}_*.jsonl"
-    matches = sorted(glob.glob(str(pattern)))
-    if not matches:
-        return None
-    path = Path(matches[0])
-    try:
-        return _decode_jsonl_texts(path)
-    except Exception as e:
-        logger.warning(f"Failed to load cached dataset chunks {path}: {e}")
-        return None
-
 
 def build_wikipedia_retriever(
     *,
