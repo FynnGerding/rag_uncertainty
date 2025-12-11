@@ -1,33 +1,36 @@
 import random
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import outlines
+from outlines import models, generate
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, List
 from tqdm.auto import tqdm
 
 import torch, random
 
 class LLM:
-    def __init__(self, model, tokenizer, device="cuda"):
-        self.model = model
-        self.tokenizer = tokenizer
+    def __init__(self, model_name: str, device: str = "cuda"):
         self.device = device
-        self.cache_dict = {}
+        
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+        
+        self.model = models.Transformers(self.hf_model, self.tokenizer)
+        
+        self.generator_cache = {} 
 
-    @torch.no_grad()
     def generate(
         self,
         prompt: str,
         max_new_tokens: int = 128,
         temperature: float = 0.1,
-        top_p: float = 1.0,
-        seed: int | None = None,
+        seed: Optional[int] = None,
+        constraint: Optional[Union[str, type]] = None, 
         return_logprobs: bool = False,
     ):
         """
-        Generate text continuation from a prompt using a local LLM.
-        Returns:
-            - continuation (str)
-            - token_logprobs (list[float]) if return_logprobs=True
+        Args:
+            constraint: A regex string, a type (int, float, bool), or None for unconstrained text.
         """
         if seed is not None:
             random.seed(seed)
@@ -35,36 +38,62 @@ class LLM:
             if self.device == "cuda":
                 torch.cuda.manual_seed_all(seed)
 
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        input_len = inputs["input_ids"].shape[-1]
+        generator = self._get_generator(constraint)
 
-        gen_out = self.model.generate(
-            **inputs,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-            max_new_tokens=max_new_tokens,
-            pad_token_id=self.tokenizer.eos_token_id,
-            output_scores=True,
-            return_dict_in_generate=True,
-        )
+        sampler = outlines.samplers.multinomial(temperature=temperature)
+        
+        continuation = generator(prompt, max_tokens=max_new_tokens, sampler=sampler)
 
-        gen_ids = gen_out.sequences[0][input_len:]
-        continuation = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+        continuation_str = str(continuation)
 
         if not return_logprobs:
             return continuation, None
 
-        # per-token logprobs
-        token_logprobs = []
-        for step_scores, tok_id in zip(gen_out.scores, gen_ids):
-            logprobs = torch.log_softmax(step_scores, dim=-1)
-            token_logprobs.append(logprobs[..., tok_id].item())
-
+        token_logprobs = self._score_sequence(prompt, continuation_str)
+        
         return continuation, token_logprobs
 
-    def save_cache(self):
-        pass
+    def _get_generator(self, constraint: Union[str, type, None]):
+        """Factory method to retrieve or compile outlines generators."""
+        if constraint is None:
+            return generate.text(self.model)
+        
+        if constraint in self.generator_cache:
+            return self.generator_cache[constraint]
+
+        if isinstance(constraint, str):
+            gen = generate.regex(self.model, constraint)
+        elif constraint in [int, float, bool]:
+            gen = generate.format(self.model, constraint)
+        else:
+            raise ValueError(f"Unsupported constraint type: {constraint}")
+
+        self.generator_cache[constraint] = gen
+        return gen
+
+    @torch.no_grad()
+    def _score_sequence(self, prompt: str, continuation: str) -> List[float]:
+        """
+        Re-runs a forward pass to extract logprobs for the generated sequence.
+        """
+        full_text = prompt + continuation
+        inputs = self.tokenizer(full_text, return_tensors="pt").to(self.device)
+        
+        prompt_len = self.tokenizer(prompt, return_tensors="pt")["input_ids"].shape[1]
+        
+        outputs = self.hf_model(**inputs)
+        logits = outputs.logits
+        
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+        
+        log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
+        
+        gathered_logprobs = torch.gather(log_probs, 2, shift_labels.unsqueeze(2)).squeeze(2)
+        
+        continuation_logprobs = gathered_logprobs[0, prompt_len-1:].tolist()
+        
+        return continuation_logprobs
 
 def pick_device():
     if torch.cuda.is_available():
@@ -72,26 +101,6 @@ def pick_device():
     if torch.backends.mps.is_available():
         return "mps"
     return "cpu"
-
-
-def load_model_and_tokenizer(model_name: str, device: str):
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    if device == "cuda":
-        dtype = torch.float16
-    elif device == "mps":
-        dtype = torch.float16
-    else:
-        dtype = torch.float32
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        dtype=dtype,
-    ).to(device)
-
-    llm = LLM(model, tokenizer, device)
-    return llm
-
 
 def _text_from_doc(d: Any) -> str:
     # Supports plain strings or dicts with a "text" field

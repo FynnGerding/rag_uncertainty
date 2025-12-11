@@ -6,7 +6,7 @@ import torch
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
 from rag_uncertainty.data_loader import load_data
 from rag_uncertainty.retrievers import build_wikipedia_retriever
-from rag_uncertainty.pipeline_utils import load_model_and_tokenizer, sample_generations
+from rag_uncertainty.pipeline_utils import LLM, sample_generations
 from rag_uncertainty.eval import EvalEngine
 
 logger = logging.getLogger("rag_uncertainty")
@@ -39,7 +39,7 @@ def pipeline():
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     logger.debug(f"Using device: {device}")
     
-    llm = load_model_and_tokenizer("Qwen/Qwen2.5-7B-Instruct", device)
+    llm = LLM("Qwen/Qwen2.5-7B-Instruct", device)
     
     retriever = build_wikipedia_retriever(
         data_loader=load_data,

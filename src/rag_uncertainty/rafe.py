@@ -11,6 +11,14 @@ RELEVANT = "RELEVANT"
 
 logger = logging.getLogger("rag_uncertainty")
 
+def _qwen_prompt(system: str, user: str) -> str:
+    """Helper to format prompts for Qwen2.5/ChatML models."""
+    return (
+        f"<|im_start|>system\n{system}<|im_end|>\n"
+        f"<|im_start|>user\n{user}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
+
 def _stringify(hit: Any) -> str:
     """Convert retriever results to plain strings."""
     if isinstance(hit, str):
@@ -21,50 +29,32 @@ def _stringify(hit: Any) -> str:
                 return hit[key]
     return str(hit)
 
-
-def _pick_label(raw: str) -> str:
-    raw = raw.strip().upper()
-    if "SUPPORTED" in raw and "NOT" not in raw:
-        return SUPPORTED
-    if "NOT" in raw:
-        return NOT_SUPPORTED
-    if "IRRELEV" in raw:
-        return IRRELEVANT
-    return IRRELEVANT
-
-
-def _pick_relevance(raw: str) -> str:
-    raw = raw.strip().upper()
-    if "IRRELEV" in raw or "NOT RELEVANT" in raw or "OFF-TOPIC" in raw:
-        logger.debug(f"Decision: '{raw}' got assigned to IRRELEVANT")
-        return IRRELEVANT
-    logger.debug(f"Decision: '{raw}' got assigned to RELEVANT")
-    return RELEVANT
-
-
 def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
     """
-    Rewrite an atomic fact so it is self-contained, replacing vague references with concrete entities.
-    Falls back to the original fact if the model does not return a revision.
+    Rewrite an atomic fact so it is self-contained.
+    Uses unconstrained generation but within a strict chat template.
     """
-    prompt = f"""Task: Rewrite the "Claim" to be self-contained by replacing pronouns (he, she, it, they) with specific names from the "Context".
-Rules:
-1. Output ONLY the rewritten sentence.
-2. Do not add new information.
-3. If the Claim cannot be resolved using the Context, return the Claim unchanged.
+    system_msg = (
+        "You are a helpful editor. Your task is to rewrite the 'Claim' to be self-contained "
+        "by replacing pronouns (he, she, it, they) with specific names from the 'Context'.\n"
+        "Rules:\n"
+        "1. Output ONLY the rewritten sentence.\n"
+        "2. Do not add new information.\n"
+        "3. If the Claim cannot be resolved using the Context, return the Claim unchanged."
+    )
+    
+    user_msg = (
+        f"Context: {original_context}\n"
+        f"Claim: {atomic_fact}\n"
+        "Rewritten:"
+    )
 
-Context: The Apollo 13 mission was a critical lunar mission. It failed to land.
-Claim: It failed to land.
-Rewritten: The Apollo 13 mission failed to land.
-
-Context: Steve Jobs co-founded Apple.
-Claim: He was forced out in 1985.
-Rewritten: Steve Jobs was forced out in 1985.
-
-    Context: {original_context}
-    Claim: {atomic_fact}
-    Rewritten:"""
-    revised, _ = llm.generate(prompt, temperature=0.1)
+    prompt = _qwen_prompt(system_msg, user_msg)
+    
+    # We restrict the output to a single line to prevent verbose chatter
+    # Regex: Any characters followed by End of String or Newline
+    revised, _ = llm.generate(prompt, temperature=0.1, constraint=r"[^\n]+")
+    
     revised = revised.strip()
     logger.debug(f"Fact '{atomic_fact}' was revised to: '{revised}'")
     return revised or atomic_fact.strip()
@@ -73,36 +63,65 @@ Rewritten: Steve Jobs was forced out in 1985.
 def check_relevance(question: str, atomic_fact: str, answer_context: str, llm) -> str:
     """
     Determine whether an atomic fact helps answer the user's question.
-    Returns RELEVANT or IRRELEVANT.
+    Uses a regex constraint to force a 'Reasoning' -> 'Label' structure.
     """
     logger.debug(f"Performing relevance check of atomic fact: {atomic_fact}")
-    prompt = f"""You filter atomic facts for factuality evaluation.
-Question: {question}
-Answer (for context): {answer_context}
-Atomic fact: {atomic_fact}
+    
+    system_msg = (
+        "You filter atomic facts for factuality evaluation. "
+        "Does the Atomic Fact help answer the Question given the context?\n"
+        "If it directly addresses, supports, or contradicts the question, it is RELEVANT. "
+        "If it is background, tangential, or unrelated, it is IRRELEVANT."
+    )
+    
+    user_msg = (
+        f"Question: {question}\n"
+        f"Answer (for context): {answer_context}\n"
+        f"Atomic fact: {atomic_fact}\n\n"
+        "Respond with a short rationale (max 1 sentence) followed by the final Label."
+    )
 
-Does this fact help answer the question? If it directly addresses, supports, or contradicts the question, it is RELEVANT. If it is background, tangential, or unrelated, it is IRRELEVANT.
-Respond with a short rationale followed by 'Label: RELEVANT' or 'Label: IRRELEVANT'."""
-    result, _ = llm.generate(prompt, temperature=0.0001, max_new_tokens=64) # Temperature to (near) zero as in SAFE paper
-    return _pick_relevance(result)
+    prompt = _qwen_prompt(system_msg, user_msg)
+    
+    # Force the model to output: "Rationale: ... \nLabel: RELEVANT|IRRELEVANT"
+    # This ensures we get Chain-of-Thought accuracy with structured parsing
+    structure_regex = r"Rationale: [^\n]+\nLabel: (RELEVANT|IRRELEVANT)"
+    
+    result, _ = llm.generate(
+        prompt, 
+        temperature=0.0, 
+        constraint=structure_regex,
+        max_new_tokens=128
+    )
+    
+    # Extract the label from the structured output
+    if "Label: RELEVANT" in result:
+        return RELEVANT
+    return IRRELEVANT
 
 
 def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 5):
     """
-    Generate a verification query for a fact and retrieve evidence snippets.
+    Generate a verification query using a constrained regex to ensure a clean single-line query.
     """
-    query_prompt = (
-        "You create search queries to fact-check statements.\n"
+    system_msg = "You create concise Google search queries to fact-check statements."
+    user_msg = (
         f"Statement: {revised_fact}\n"
         "Write a concise search query that would retrieve evidence to verify whether this statement is true.\n"
         "Query:"
     )
-    search_query, _ = llm.generate(query_prompt, temperature=0.1)
+
+    prompt = _qwen_prompt(system_msg, user_msg)
+    
+    # Regex constraint: Non-newline characters only
+    search_query, _ = llm.generate(prompt, temperature=0.1, constraint=r"[^\n]+")
+    
     search_query = search_query.strip() or revised_fact
 
     hits = retriever.search(query=search_query, top_k=top_k)
     evidence = [_stringify(h) for h in hits][:top_k]
     return search_query, evidence
+
 
 def _rate_fact(
     *,
@@ -113,36 +132,42 @@ def _rate_fact(
     rater,
     valid_labels: List[str] | None = None,
 ) -> str:
+    """
+    Classify the claim using strict constrained generation (No parsing logic required).
+    """
     logger.debug(f"Rating claim: '{claim}'")
-    """Ask rater to check if claim is supported."""
     valid_labels = valid_labels or [SUPPORTED, NOT_SUPPORTED]
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())
-    prompt = f"""You are a factuality checker.
-Given the QUESTION, ANSWER, and EVIDENCE, classify the CLAIM as one of:
-SUPPORTED or NOT_SUPPORTED. If evidence is missing or inconclusive, choose NOT_SUPPORTED.
+    
+    system_msg = (
+        "You are a strict factuality checker.\n"
+        "Given the QUESTION, ANSWER, and EVIDENCE, classify the CLAIM as one of: "
+        f"{', '.join(valid_labels)}.\n"
+        "If evidence is missing or inconclusive, choose NOT_SUPPORTED."
+    )
+    
+    user_msg = (
+        f"QUESTION: {question}\n"
+        f"ANSWER: {answer}\n"
+        f"CLAIM: {claim}\n"
+        f"EVIDENCE: {joined_evidence or '(no evidence)'}\n\n"
+        "Label:"
+    )
 
-QUESTION:
-{question}
-
-ANSWER:
-{answer}
-
-CLAIM:
-{claim}
-
-EVIDENCE:
-{joined_evidence or '(no evidence)'}
-
-Label (SUPPORTED or NOT_SUPPORTED only):"""
-    result, _ = rater.generate(prompt, temperature=0.01)
-    picked = _pick_label(result)
-    if picked not in valid_labels:
-        return NOT_SUPPORTED
-    return picked
+    prompt = _qwen_prompt(system_msg, user_msg)
+    
+    # Dynamically build regex from valid labels e.g., "(SUPPORTED|NOT_SUPPORTED)"
+    label_options = "|".join(valid_labels)
+    constraint_regex = f"({label_options})"
+    
+    # The model acts as a classifier here, outputting ONLY the label
+    label, _ = rater.generate(prompt, temperature=0.0, constraint=constraint_regex)
+    
+    return label
 
 
 def rafe_factuality(
-        generations: dict, # {"generated_texts": List[str], "logprobs": ...}
+        generations: dict, 
         question: str,
         llm,
         *,
@@ -180,8 +205,10 @@ def rafe_factuality(
 
         for entry in deduped_facts:
             raw_claim = entry["fact"]
-            original_context = answer  # use full answer for pronoun resolution
+            original_context = answer 
+            
             revised_claim = revise_fact(raw_claim, original_context, llm)
+            
             relevance = check_relevance(
                 question=question,
                 atomic_fact=revised_claim,

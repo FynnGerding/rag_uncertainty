@@ -1,4 +1,4 @@
-# Code taken from https://github.com/shmsw25/FActScore/blob/main/factscore/atomic_facts.py
+# Code directly inspired from https://github.com/shmsw25/FActScore/blob/main/factscore/atomic_facts.py
 # Simplified: assumes llm is always provided (no fallback logic)
 import json
 import re
@@ -300,9 +300,7 @@ class AtomicFactGenerator:
             prompt_parts.append(f"Sentence: {sentence}")
             prompt = "\n".join(prompt_parts).strip() + "\n- "
 
-            #print(f'Prompt:\n\n{prompt}')
-            output, _ = self.llm.generate(prompt)
-            #print(f'\nOutput:\n{output}')
+            output, _ = self.llm.generate(prompt, max_new_tokens=512)
 
             facts = text_to_sentences(output)
             atoms[sentence] = facts

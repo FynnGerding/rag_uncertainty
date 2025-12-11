@@ -24,6 +24,8 @@ dependencies = [
     "numpy==2.3.4",
     "TruthTorchLM==0.1.17",
     "bm25s==0.2.14",
+    "outlines==0.1.14",
+    "notebook"
 ]
 
 [tool.setuptools]
