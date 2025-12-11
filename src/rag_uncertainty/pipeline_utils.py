@@ -7,6 +7,8 @@ from typing import Any, List
 from tqdm.auto import tqdm
 from typing import Optional, Union
 
+from rag_uncertainty.retrievers import RetrievedChunk
+
 class LLM:
     def __init__(self, model_name: str, device: str = "cuda"):
         self.device = device
@@ -116,22 +118,6 @@ def pick_device():
         return "mps"
     return "cpu"
 
-def _text_from_doc(d: Any) -> str:
-    # Supports plain strings or dicts with a "text" field
-    return d.get("text", d) if isinstance(d, dict) else str(d)
-
-
-def _text_from_hit(hit: Any) -> str:
-    """
-    Works with either:
-      - RetrievedChunk(text=..., meta={"doc": original_doc})
-      - Plain string doc
-      - Dict doc with "text" field
-    """
-    if hasattr(hit, "text"):
-        return str(getattr(hit, "text"))
-    return _text_from_doc(hit)
-
 def _qwen_prompt(system: str, user: str) -> str:
     """Helper to format prompts for Qwen2.5 Instruct model."""
     return (
@@ -179,8 +165,7 @@ def sample_generations(
     n: int = 1,
     max_new_tokens: int = 512,
     temperature: float = 0.5,
-    base_seed: int = 42,
-):
+    ):
     """
     Generates RAG answers using the LLM wrapper and Qwen formatting.
     """
@@ -190,13 +175,12 @@ def sample_generations(
     logprobs_per_gen = []
 
     for i in tqdm(range(n), desc="Generations"):
-        seed = None if base_seed is None else (base_seed + i)
         
         text, token_logprobs = llm.generate(
             prompt,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
-            seed=seed,
+            seed=None,
             return_logprobs=True,
         )
 
