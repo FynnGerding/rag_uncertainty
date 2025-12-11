@@ -5,8 +5,7 @@ from outlines import models, generate
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, List
 from tqdm.auto import tqdm
-
-import torch, random
+from typing import Optional, Union
 
 class LLM:
     def __init__(self, model_name: str, device: str = "cuda"):
