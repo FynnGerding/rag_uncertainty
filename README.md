@@ -16,33 +16,40 @@ The pipeline can be run as follows:
 make run
 ```
 
-## Novelty: Context-Delta Claim Uncertainty (CDCU)
+## Novelty: Claim-Evidence Matrix (CEM)
+Building on [**Claim-Level Uncertainty (CLUE)**](https://arxiv.org/pdf/2409.03021) and [**Graph-based Uncertainty Metrics**](https://neurips.cc/virtual/2024/poster/94679), CEM introduces a RAG-specific framework to quantify epistemic fragility. It replaces expensive stochastic consistency checks with a single-pass assessment of evidence grounding.
 
-Our approach draws inspiration from [**Claim-Level Uncertainty (CLUE)**](https://arxiv.org/pdf/2409.03021) and [**Graph-based Uncertainty Metrics**](https://neurips.cc/virtual/2024/poster/94679) but introduces a RAG-aware twist: **Context-Delta Claim Uncertainty (CDCU)**.
+#### Key Advantages
+- Grounding over Consistency: Verifies if claims are actively entailed by retrieved documents, independent of model confidence.
+- Efficiency: Reduces compute by requiring only one generation pass ($1$ vs $N$) via parallelizable support checks.
+- Retrieval-Awareness: Distinguishes between robustly supported claims and those hinging on sparse evidence.
+#### Formulation
+We decompose response $R$ into atomic claims $C$ and construct a binary matrix $M$ where $M_{ij}=1$ if document $d_j$ supports claim $c_i$. Uncertainty is defined as the inverse of evidence redundancy:
 
-Instead of measuring static agreement or centrality, we quantify sensitivity to the retrieved context. We perform leave-one-evidence-out ablations on the top-k snippets (including a no-RAG pass), generating responses for each variation and mapping them to atomic claims. CDCU measures the stability of a claim by tracking the drop in support when specific evidence is removed. We aggregate these deltas, weighted by claim frequency across generations, to determine final certainty and per-snippet influence scores.
+$$U(c_i) = 1 - \frac{1}{k} \sum_{j=1}^k M_{ij}$$
 
+Here, $U \approx 0$ implies robust support across the context window, while high $U$ indicates scarce support for a claim.
+
+## Uncertainty Estimation Methods
+
+Our implementatoins are based on **TruthTorchLM** ([GitHub](https://github.com/lexin-zhou/TruthTorchLM)).
+
+### Eemantic Entropy
+
+Add method summary here...
+
+### SumEigen
+
+Add method summary here...
+
+## Long-Form Factuality: SAFE
+
+Our code is addapted from **Google DeepMind's Long-form Factuality** ([GitHub](https://github.com/google-deepmind/long-form-factuality)), making SAFE usable within a RAG context.
 
 ## Data Source
 
 The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix E.6** of the paper [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
 
-## Code Adaptation: Uncertainty estimation measures
-
-Due to compatibility constraints, we adapted specific logic directly into our codebase rather than importing the packages.
-* `atomic_facts.py` is adapted from **FActScore** ([GitHub](https://github.com/shmsw25/FActScore)).
-* `uncertainty_estimation.py` integrates methods from **TruthTorchLM** ([GitHub](https://github.com/lexin-zhou/TruthTorchLM)) and **Google DeepMind's Long-form Factuality** ([GitHub](https://github.com/google-deepmind/long-form-factuality)).
-
 ## Repo Layout
 
-- `src/rag_uncertainty/` – runnable package (entry point `pipeline.py`)
-  - `pipeline.py` – orchestrates retrieval-augmented generation, uncertainty scoring, and writes `results.json/csv` (incrementally during a run).
-  - `pipeline_utils.py` – wraps HF causal models for sampling and builds retrieval-aware prompts.
-  - `retrievers.py` – BM25 and Contriever retrievers implementing a shared interface.
-  - `atomic_facts.py` – FActScore-style atomic fact extraction; loads prompts from `demos.json`.
-  - `uncertainty_estimation.py` – adapters around TruthTorchLM semantic entropy, sum-eigen, and SAFE factuality scoring.
-  - `data.py` – loads Hugging Face datasets, chunks articles, and caches them under `data/*.jsonl`.
-  - `questions.json` – grouped evaluation prompts consumed by the pipeline.
-- `data/` – cache directory created on demand by `data.py`.
-- `third_party/` – vendored dependencies (e.g., TruthTorchLM assets, factscore helpers) imported by the pipeline.
-- `results.json` / `results.csv` – outputs generated in the repo root; refreshed after each processed question.
+Add later...
