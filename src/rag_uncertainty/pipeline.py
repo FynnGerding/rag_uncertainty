@@ -39,13 +39,17 @@ def pipeline():
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     logger.debug(f"Using device: {device}")
     
+    logger.info("Loading LLM")
     llm = LLM("Qwen/Qwen2.5-7B-Instruct", device)
+    logger.info("LLM successfully loaded.")
     
+    logger.info("Loading Wikipedia Retriever")
     retriever = build_wikipedia_retriever(
         data_loader=load_data,
         cache_dir="bm25_index_cache",
         data_cache_dir="data",
     )
+    logger.info("Wikipedia Retriever successfully loaded.")
 
     fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
 
@@ -61,7 +65,7 @@ def pipeline():
         for question in questions:
             logger.debug(f"{category}: {question}")
 
-            logger.debug("Generating answers...")
+            logger.debug("Generating answers.")
             generations = sample_generations(
                 llm=llm,
                 question=question,
@@ -70,21 +74,21 @@ def pipeline():
                 n=5,
                 max_new_tokens=32,
                 temperature=0.1,
-                top_p=0.95,
                 base_seed=0,
             )
 
-            logger.debug("Evaluating metrics (SE, SumEigen, SAFE)...")
+            logger.debug("Evaluating metrics (SE, SumEigen, RAFE, and CEM)")
             metrics = engine.evaluate(generations, question)
+            logger.debug("Evaluating complete.")
             
             se = metrics["semantic_entropy"]
             su = metrics["sum_eigen"]
-            safe_out = metrics["safe"]
+            rafe_out = metrics["rafe"]
             logger.debug("DONE")
 
             # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
-                gen_info = safe_out["per_generation"][str(gen_id)]
+                gen_info = rafe_out["per_generation"][str(gen_id)]
                 details = gen_info["details"]
                 atomic_facts = [d["claim"] for d in details]
 
@@ -93,7 +97,7 @@ def pipeline():
                     "question": question,
                     "answer": answer,
                     "atomic_facts": atomic_facts,
-                    "safe_details": details,
+                    "rafe_details": details,
                     # SE
                     "semantic_entropy_global": se["semantic_entropy"],
                     "semantic_entropy_per_gen": se["score_for_each_generation"][gen_id],
@@ -101,13 +105,13 @@ def pipeline():
                     # SU
                     "sum_eigen": su["U_eigv"],
                     "sum_eigen_truth_value": su["truth_value"],
-                    # SAFE
-                    "safe_overall_score": safe_out["overall"]["score"],
-                    "safe_gen_score": gen_info["score"],
-                    "safe_gen_supported": gen_info["supported"],
-                    "safe_gen_not_supported": gen_info["not_supported"],
-                    "safe_gen_irrelevant": gen_info["irrelevant"],
-                    "safe_gen_total_claims": gen_info["total_claims"],
+                    # RAFE
+                    "rafe_overall_score": rafe_out["overall"]["score"],
+                    "rafe_gen_score": gen_info["score"],
+                    "rafe_gen_supported": gen_info["supported"],
+                    "rafe_gen_not_supported": gen_info["not_supported"],
+                    "rafe_gen_irrelevant": gen_info["irrelevant"],
+                    "rafe_gen_total_claims": gen_info["total_claims"],
                 }
 
                 results.append(record)

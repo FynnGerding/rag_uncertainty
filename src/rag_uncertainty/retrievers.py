@@ -53,7 +53,7 @@ class BM25Retriever:
         # 1. Attempt to Load Cached Index
         if load_if_exists and save_dir and os.path.exists(save_dir):
             try:
-                logger.info(f"Loading BM25 index from {save_dir}...")
+                logger.info(f"Loading BM25 index from {save_dir}.")
                 self._retriever = bm25s.BM25.load(save_dir, load_corpus=False)
                 # When loading from an existing index, assume the caller supplies docs if needed.
                 if self._docs is None:
@@ -66,14 +66,14 @@ class BM25Retriever:
         # 2. Extract Text
         if documents is None:
             raise ValueError("documents must be provided when no cached index is available.")
-        logger.info(f"Extracting text from {len(documents)} documents...")
+        logger.info(f"Extracting text from {len(documents)} documents.")
         corpus_texts = [self._get_text(d) for d in documents]
 
         # 3. Tokenize & Index
-        logger.info("Tokenizing corpus (this may take a moment)...")
+        logger.info("Tokenizing corpus (this may take a moment).")
         corpus_tokens = bm25s.tokenize(corpus_texts, stopwords="en", show_progress=True)
 
-        logger.info("Building BM25 index...")
+        logger.info("Building BM25 index.")
         self._retriever = bm25s.BM25(corpus=None)
         self._retriever.index(corpus_tokens, show_progress=True)
         
@@ -180,16 +180,16 @@ def build_wikipedia_retriever(
     cache_path = Path(cache_dir)
     index_exists = cache_path.exists()
 
-    # Load docs from first JSON cache if available
+    # Use cached index
+    if index_exists:
+        return BM25Retriever(documents=None, save_dir=cache_dir, load_if_exists=True)
+
+    # Load docs from JSON cache if available
     docs = _load_corpus_cache(data_cache_dir=data_cache_dir)
     if docs is None:
-        docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)
+        docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)    
 
-    if index_exists:
-        # Use cached index with available docs (may be None if truly self-contained)
-        return BM25Retriever(docs, save_dir=cache_dir, load_if_exists=True)
-
-    # No index: ensure docs exist, otherwise download
+    # No index and no JSON: download
     if docs is None:
         if data_loader is None:
             try:
@@ -197,8 +197,8 @@ def build_wikipedia_retriever(
                 data_loader = data_module.data  # type: ignore[attr-defined]
             except Exception as e:
                 raise RuntimeError("No data_loader provided and failed to import data.data") from e
-        logger.info(f"Downloading/preparing dataset {dataset_name}...")
+        logger.info(f"Downloading/preparing dataset {dataset_name}.")
         docs = data_loader(dataset_name)
 
     # Build new index (saves index only; data caching handled by data_loader)
-    return BM25Retriever(docs, save_dir=cache_dir, load_if_exists=False)
+    return BM25Retriever(documents=docs, save_dir=cache_dir, load_if_exists=False)

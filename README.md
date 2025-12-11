@@ -17,7 +17,7 @@ make run
 ```
 
 ## Novelty: Claim-Evidence Matrix (CEM)
-Building on [**Claim-Level Uncertainty (CLUE)**](https://arxiv.org/pdf/2409.03021) and [**Graph-based Uncertainty Metrics**](https://neurips.cc/virtual/2024/poster/94679), CEM introduces a RAG-specific framework to quantify epistemic fragility. It replaces expensive stochastic consistency checks with a single-pass assessment of evidence grounding.
+Building on [**Claim-Level Uncertainty (CLUE)**](https://arxiv.org/pdf/2409.03021) and [**Graph-based Uncertainty Metrics**](https://neurips.cc/virtual/2024/poster/94679), **CEM** introduces a RAG-specific framework to quantify epistemic fragility. It replaces expensive stochastic consistency checks with a single-pass assessment of evidence grounding.
 
 #### Key Advantages
 - Grounding over Consistency: Verifies if claims are actively entailed by retrieved documents, independent of model confidence.
@@ -32,7 +32,7 @@ Here, $U \approx 0$ implies robust support across the context window, while high
 
 ## Uncertainty Estimation Methods
 
-Our implementatoins are based on **TruthTorchLM** ([GitHub](https://github.com/lexin-zhou/TruthTorchLM)).
+Our implementatoins are based on **TruthTorchLM** [(GitHub)](https://github.com/lexin-zhou/TruthTorchLM)
 
 ### Semantic Entropy (White-box)
 
@@ -52,11 +52,15 @@ Designed for closed-source models where token logits are unavailable, this appro
 
 ## Long-Form Factuality in RAG: RAFE (vs SAFE)
 
-We additionally propose RAFE (Retrieval-Augmented Factuality Estimation). Adapting Google DeepMind's [SAFE (Search-Augmented Factuality Estimation)](https://arxiv.org/pdf/2403.18802), we replace external Google Search steps with local context verification. Our code is addapted from **Google DeepMind's Long-form Factuality** ([GitHub](https://github.com/google-deepmind/long-form-factuality)) to measure factuality strictly against retrieved evidence (RAG) rather than open web search.
+We additionally propose RAFE (Retrieval-Augmented Factuality Estimation). Adapting Google DeepMind's SAFE (Search-Augmented Factuality Estimation) [(arxiv)](https://arxiv.org/pdf/2403.18802), we replace external Google Search steps with local context verification. Our code is addapted from the DeepMind's SAFE implementation [(GitHub)](https://github.com/google-deepmind/long-form-factuality) to measure factuality using retrieved evidence (RAG) rather than open web search. We utilize the [outlines library](https://github.com/dottxt-ai/outlines)  to enforce sensible atomic facts and `SUPPORTED` / `NOT_SUPPORTED` and `RELEVANT` / `IRRELEVANT` lables.
 
 ## Data Source
 
 The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix E.6** of the paper [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
+
+## LLM
+
+For all expeiments we use [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
 
 ## Repo Layout
 

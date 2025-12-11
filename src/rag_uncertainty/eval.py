@@ -13,9 +13,9 @@ from rag_uncertainty.pipeline_utils import LLM
 
 hf_logging.set_verbosity_error()
 
-class SafeWrapper:
+class RafeWrapper:
     """
-    Wrapper to make safe_factuality compatible with the EvalEngine interface.
+    Wrapper to make rafe_factuality compatible with the EvalEngine interface.
     """
     def __init__(self, llm: LLM, retriever: BM25Retriever, fact_gen: AtomicFactGenerator):
         self.llm = llm
@@ -23,7 +23,7 @@ class SafeWrapper:
         self.fact_gen = fact_gen
 
     def forward_api(self, question, sampled_generations_dict, **kwargs):
-        return safe_factuality(
+        return rafe_factuality(
             generations=sampled_generations_dict,
             question=question,
             llm=self.llm,
@@ -81,11 +81,11 @@ class EvalEngine:
                 )
             )
 
-            # Register SAFE only if dependencies are provided
+            # Register RAFE only if dependencies are provided
             if llm and retriever and fact_gen:
                 self._register_metric(
-                    "safe",
-                    SafeWrapper(llm, retriever, fact_gen)
+                    "rafe",
+                    RafeWrapper(llm, retriever, fact_gen)
                 )
 
     def _register_metric(self, name, calculator_instance):
@@ -114,7 +114,7 @@ class EvalEngine:
                     continue
                 
                 calculator = self.metrics[name]
-                # Pass necessary args to forward_api, ignoring unused ones for SafeWrapper
+                # Pass necessary args to forward_api, ignoring unused ones for RafeWrapper
                 results[name] = calculator.forward_api(
                     model="", 
                     messages=[], 

@@ -39,6 +39,7 @@ create-venv:
 install: create-venv
 	@echo "Installing project dependencies..."
 	$(PIP) install -e .
+	$(PYTHON) -m spacy download en_core_web_sm
 
 # 6. RUN: Execute the pipeline
 run:

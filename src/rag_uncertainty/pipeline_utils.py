@@ -1,7 +1,7 @@
 import random
 import torch
 import outlines
-from outlines import models, generate
+from outlines import models, generate, samplers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, List
 from tqdm.auto import tqdm
@@ -11,63 +11,75 @@ class LLM:
     def __init__(self, model_name: str, device: str = "cuda"):
         self.device = device
         
+        # Load underlying HF components
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
         
+        # Wrap for Outlines
         self.model = models.Transformers(self.hf_model, self.tokenizer)
         
+        # Cache now keys on (constraint, temperature) because the sampler is baked in
         self.generator_cache = {} 
 
     def generate(
         self,
         prompt: str,
         max_new_tokens: int = 128,
-        temperature: float = 0.1,
+        temperature: float = 0.0, 
         seed: Optional[int] = None,
         constraint: Optional[Union[str, type]] = None, 
         return_logprobs: bool = False,
     ):
-        """
-        Args:
-            constraint: A regex string, a type (int, float, bool), or None for unconstrained text.
-        """
         if seed is not None:
             random.seed(seed)
             torch.manual_seed(seed)
             if self.device == "cuda":
                 torch.cuda.manual_seed_all(seed)
 
-        generator = self._get_generator(constraint)
+        # 1. Get the generator (baked with the specific constraint AND temperature)
+        generator = self._get_generator(constraint, temperature)
 
-        sampler = outlines.samplers.multinomial(temperature=temperature)
-        
-        continuation = generator(prompt, max_tokens=max_new_tokens, sampler=sampler)
+        # 2. Generate
+        continuation = generator(prompt, max_tokens=max_new_tokens)
 
         continuation_str = str(continuation)
 
         if not return_logprobs:
             return continuation, None
 
+        # 3. Score sequence for logprobs
         token_logprobs = self._score_sequence(prompt, continuation_str)
         
         return continuation, token_logprobs
 
-    def _get_generator(self, constraint: Union[str, type, None]):
-        """Factory method to retrieve or compile outlines generators."""
-        if constraint is None:
-            return generate.text(self.model)
+    def _get_generator(self, constraint: Union[str, type, None], temperature: float):
+        """
+        Retrieves a generator from cache or compiles a new one.
+        The cache key is (constraint, temperature) because the sampler is immutable.
+        """
+        cache_key = (constraint, temperature)
         
-        if constraint in self.generator_cache:
-            return self.generator_cache[constraint]
+        if cache_key in self.generator_cache:
+            return self.generator_cache[cache_key]
 
-        if isinstance(constraint, str):
-            gen = generate.regex(self.model, constraint)
+        if temperature == 0.0:
+            sampler = samplers.greedy()
+        else:
+            sampler = samplers.multinomial(temperature=temperature)
+
+        # Compile new generator
+        if constraint is None:
+            gen = generate.text(self.model, sampler=sampler)
+        elif isinstance(constraint, str):
+            # Assume Regex
+            gen = generate.regex(self.model, constraint, sampler=sampler)
         elif constraint in [int, float, bool]:
-            gen = generate.format(self.model, constraint)
+            # Native Types
+            gen = generate.format(self.model, constraint, sampler=sampler)
         else:
             raise ValueError(f"Unsupported constraint type: {constraint}")
 
-        self.generator_cache[constraint] = gen
+        self.generator_cache[cache_key] = gen
         return gen
 
     @torch.no_grad()
@@ -90,8 +102,11 @@ class LLM:
         
         gathered_logprobs = torch.gather(log_probs, 2, shift_labels.unsqueeze(2)).squeeze(2)
         
-        continuation_logprobs = gathered_logprobs[0, prompt_len-1:].tolist()
-        
+        if prompt_len - 1 < gathered_logprobs.shape[1]:
+            continuation_logprobs = gathered_logprobs[0, prompt_len-1:].tolist()
+        else:
+            continuation_logprobs = []
+            
         return continuation_logprobs
 
 def pick_device():
@@ -144,7 +159,6 @@ def sample_generations(
     n: int,
     max_new_tokens: int = 128,
     temperature: float = 0.9,
-    top_p: float = 0.95,
     base_seed: int = 0,
 ):
     prompt = build_prompt(question, retriever, k=k_ctx)
@@ -157,7 +171,6 @@ def sample_generations(
             prompt,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
-            top_p=top_p,
             seed=seed,
             return_logprobs=True,
         )
