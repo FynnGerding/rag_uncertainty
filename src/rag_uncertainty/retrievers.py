@@ -8,6 +8,8 @@ import glob
 from pathlib import Path
 import bm25s
 
+from rag_uncertainty.data_loader import load_data
+
 # Configure logging
 logger = logging.getLogger("rag_uncertainty")
 
@@ -167,31 +169,33 @@ def _load_dataset_cache(dataset_name: str, data_cache_dir: str = DEFAULT_DATA_CA
 
 def build_wikipedia_retriever(
     *,
-    data_loader: Optional[Callable[[str], List[str]]] = None,
+    articles_num: Optional[int] = None,
+    chunk_size: int = 300,
+    overlap: int = 50,
     cache_dir: str = DEFAULT_BM25_CACHE_DIR,
     data_cache_dir: str = DEFAULT_DATA_CACHE_DIR,
 ) -> BM25Retriever:
     """
-    Build a BM25 retriever for Wikipedia chunks:
-    1) If an index exists, load it using docs from cache (first JSON in data).
-    2) Otherwise, use cached dataset JSON, else download via data_loader, then build & save index.
+    Builds (or loads) a BM25 retriever for Wikipedia.
+    
+    Flow:
+    1. Data: Checks JSON cache -> else Downloads/Chunks -> Returns List[str]
+    2. Index: Checks Index cache -> else Builds Index -> Returns Retriever
     """
-    dataset_name = DEFAULT_WIKI_DATASET
-    cache_path = Path(cache_dir)
-    index_exists = cache_path.exists()
+    # Load Documents (Corpus)
+    logger.info("Loading corpus.")
+    docs = load_data(
+        data_name=DEFAULT_WIKI_DATASET,
+        articles_num=articles_num,
+        chunk_size=chunk_size,
+        overlap=overlap,
+        cache_dir=data_cache_dir
+    )
 
-    docs = _load_corpus_cache(data_cache_dir=data_cache_dir)
-    if docs is None:
-        docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)
-    if docs is None:
-        if data_loader is None:
-            try:
-                import data as data_module
-                data_loader = data_module.data  # type: ignore[attr-defined]
-            except Exception as e:
-                raise RuntimeError("No data_loader provided and failed to import data.data") from e
-        logger.info(f"Downloading/preparing dataset {dataset_name}.")
-        docs = data_loader(dataset_name)
-
-    # Build new index (saves index only; data caching handled by data_loader)
-    return BM25Retriever(documents=docs, save_dir=cache_dir, load_if_exists=False)
+    # Initialize Retriever
+    logger.info("Building BM25Retriever.")
+    return BM25Retriever(
+        documents=docs, 
+        save_dir=cache_dir, 
+        load_if_exists=True
+    )

@@ -13,16 +13,12 @@ RELEVANT = "RELEVANT"
 
 logger = logging.getLogger("rag_uncertainty")
 
-def _stringify(hit: Any) -> str:
-    """Convert retriever results to plain strings."""
-    if isinstance(hit, str):
-        return hit
-    if isinstance(hit, dict):
-        for k in ("page_content", "text", "content", "body", "snippet"):
-            v = hit.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-    return ""
+def _get_text(hit: Any) -> str:
+    """Extract text from retriever result."""
+    if hasattr(hit, "text"):
+        return str(hit.text)
+    
+    raise ValueError(f"Retrieved hit of type '{type(hit).__name__}' has no '.text' attribute. Value: {hit}")
 
 def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
     """
@@ -46,8 +42,6 @@ def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
 
     prompt = _qwen_prompt(system_msg, user_msg)
     
-    # We restrict the output to a single line to prevent verbose chatter
-    # Regex: Any characters followed by End of String or Newline
     revised, _ = llm.generate(prompt, temperature=0.1, constraint=r"[^\n]+")
     
     revised = revised.strip()
@@ -114,7 +108,7 @@ def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 5):
     search_query = search_query.strip() or revised_fact
 
     hits = retriever.search(query=search_query, top_k=top_k)
-    evidence = [_stringify(h) for h in hits][:top_k]
+    evidence = [_get_text(h) for h in hits][:top_k]
     return search_query, evidence
 
 
@@ -260,7 +254,7 @@ def rafe_factuality(
         if not context_text:
             # fallback: retrieve using the question to build context
             fallback_hits = retriever.search(query=question, top_k=top_k)
-            context_text = "\n".join(_stringify(h) for h in fallback_hits).strip()
+            context_text = "\n".join(_get_text(h) for h in fallback_hits).strip()
 
         total_relevant_context_facts = 0
         if context_text:

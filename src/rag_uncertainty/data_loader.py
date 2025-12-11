@@ -3,6 +3,8 @@ import gc
 import random
 import os
 import json
+import orjson
+import glob
 from typing import Optional, List
 from datasets import load_dataset
 from tqdm import tqdm
@@ -10,40 +12,62 @@ from datasets.exceptions import DatasetGenerationError
 
 logger = logging.getLogger("rag_uncertainty")
 
+def load_jsonl(target_file):
+    total_size = os.path.getsize(target_file)
+    data = []
+    with open(target_file, "rb") as f:
+        with tqdm(total=total_size, unit='B', unit_scale=True, desc="Loading JSONL") as pbar:
+            for line in f:
+                text = orjson.loads(line)["text"]
+                data.append(text)
+                pbar.update(len(line))
+                
+    return data
+
 def load_data(
     data_name: str,
-    articles_num: Optional[int] = None,  # Defaults to None (All)
+    articles_num: Optional[int] = None,
     chunk_size: int = 300,
     overlap: int = 50,
     seed: int = 42,
     cache_dir: str = "data",
 ) -> List[str]:
     """
-    Loads and chunks a Hugging Face dataset without streaming.
-    Caches processed chunks to disk for reuse.
-    
-    Args:
-        articles_num (int, optional): Number of articles to process. 
-                                      If None, processes the entire dataset.
+    Loads text data. Priority:
+    1. specific cached file (if articles_num is set)
+    2. ANY cached file matching data_name (if articles_num is None)
+    3. Download and process from Hugging Face
     """
     os.makedirs(cache_dir, exist_ok=True)
+    sanitized_name = data_name.replace('/', '_')
     
-    dataset = None
+    # 1. Attempt to Load from Cache
+    target_file = None
+    
     if articles_num is not None:
-        cache_path = os.path.join(cache_dir, f"{data_name.replace('/', '_')}_{articles_num}.jsonl")
-        if os.path.exists(cache_path):
-            logger.info(f"Found cached dataset at {cache_path}. Loading...")
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return [json.loads(line)["text"] for line in f]
-    
+        # Case A: Specific count -> look for exact match
+        specific_path = os.path.join(cache_dir, f"{sanitized_name}_{articles_num}.jsonl")
+        if os.path.exists(specific_path):
+            target_file = specific_path
+    else:
+        # Case B: Take the first available file json file
+        existing_files = glob.glob(os.path.join(cache_dir, f"{sanitized_name}_*.jsonl"))
+        if existing_files:
+            target_file = existing_files[0] # Just take the first one found
+
+    if target_file:
+        logger.info(f"Loading cached data from: {target_file}")
+        return load_jsonl(target_file)
+
+    # --- 2. Download and Process (Cache Missing) ---
+    logger.info(f"No suitable cache found. Downloading '{data_name}'.")
     random.seed(seed)
-    logger.info(f"Loading dataset '{data_name}' (train split, non-streaming)...")
 
     target_name = '20231101.en'
     try:
         dataset = load_dataset(data_name, streaming=False, name=target_name, split="train")
     except DatasetGenerationError:
-        logger.warning("Dataset generation error. Retrying with forced redownload...")
+        logger.warning("Dataset generation error. Retrying with forced redownload.")
         dataset = load_dataset(data_name, split="train", streaming=False, name=target_name, download_mode="force_redownload")
     except Exception as e:
         logger.error(f"Failed to load dataset '{data_name}': {e}")

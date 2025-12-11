@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
-from rag_uncertainty.data_loader import load_data
+
 from rag_uncertainty.retrievers import build_wikipedia_retriever
 from rag_uncertainty.pipeline_utils import LLM, sample_generations
 from rag_uncertainty.eval import EvalEngine
@@ -45,7 +45,6 @@ def pipeline():
     
     logger.info("Loading Wikipedia Retriever")
     retriever = build_wikipedia_retriever(
-        data_loader=load_data,
         cache_dir="bm25_index_cache",
         data_cache_dir="data",
     )
