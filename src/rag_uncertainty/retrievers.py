@@ -9,7 +9,7 @@ from pathlib import Path
 import bm25s
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("rag_uncertainty")
 
 DEFAULT_WIKI_DATASET = "wikimedia/wikipedia"
 DEFAULT_DATA_CACHE_DIR = "data"

@@ -1,5 +1,6 @@
 # Inspired by https://github.com/google-deepmind/long-form-factuality/blob/main/eval/safe/search_augmented_factuality_eval.py
 
+import logging
 from atomic_facts import AtomicFactGenerator
 from typing import Dict, Any, List
 
@@ -7,6 +8,8 @@ SUPPORTED = "SUPPORTED"
 NOT_SUPPORTED = "NOT_SUPPORTED"
 IRRELEVANT = "IRRELEVANT"
 RELEVANT = "RELEVANT"
+
+logger = logging.getLogger("rag_uncertainty")
 
 def _stringify(hit: Any) -> str:
     """Convert retriever results to plain strings."""
@@ -33,9 +36,9 @@ def _pick_label(raw: str) -> str:
 def _pick_relevance(raw: str) -> str:
     raw = raw.strip().upper()
     if "IRRELEV" in raw or "NOT RELEVANT" in raw or "OFF-TOPIC" in raw:
-        print(f"Decision: '{raw}' got assigned to IRRELEVANT")
+        logger.debug(f"Decision: '{raw}' got assigned to IRRELEVANT")
         return IRRELEVANT
-    print(f"Decision: '{raw}' got assigned to RELEVANT")
+    logger.debug(f"Decision: '{raw}' got assigned to RELEVANT")
     return RELEVANT
 
 
@@ -58,12 +61,12 @@ Context: Steve Jobs co-founded Apple.
 Claim: He was forced out in 1985.
 Rewritten: Steve Jobs was forced out in 1985.
 
-Context: {original_context}
-Claim: {atomic_fact}
-Rewritten:"""
+    Context: {original_context}
+    Claim: {atomic_fact}
+    Rewritten:"""
     revised, _ = llm.generate(prompt, temperature=0.1)
     revised = revised.strip()
-    print(f"Fact '{atomic_fact}' was revised to: '{revised}'")
+    logger.debug(f"Fact '{atomic_fact}' was revised to: '{revised}'")
     return revised or atomic_fact.strip()
 
 
@@ -72,7 +75,7 @@ def check_relevance(question: str, atomic_fact: str, answer_context: str, llm) -
     Determine whether an atomic fact helps answer the user's question.
     Returns RELEVANT or IRRELEVANT.
     """
-    print(f'Performing relevance check of atomic fact: {atomic_fact}')
+    logger.debug(f"Performing relevance check of atomic fact: {atomic_fact}")
     prompt = f"""You filter atomic facts for factuality evaluation.
 Question: {question}
 Answer (for context): {answer_context}
@@ -121,7 +124,7 @@ def _rate_fact(
     rater,
     valid_labels: List[str] | None = None,
 ) -> str:
-    print(f"Rating claim: '{claim}'")
+    logger.debug(f"Rating claim: '{claim}'")
     """Ask rater to check if claim is supported."""
     valid_labels = valid_labels or [SUPPORTED, NOT_SUPPORTED]
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())

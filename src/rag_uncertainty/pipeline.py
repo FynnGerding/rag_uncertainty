@@ -1,5 +1,6 @@
-from pathlib import Path
 import json
+import logging
+from pathlib import Path
 import torch
 
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
@@ -7,6 +8,16 @@ from rag_uncertainty.data_loader import load_data
 from rag_uncertainty.retrievers import build_wikipedia_retriever
 from rag_uncertainty.pipeline_utils import load_model_and_tokenizer, sample_generations
 from rag_uncertainty.eval import EvalEngine
+
+logger = logging.getLogger("rag_uncertainty")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S")
+    )
+    logger.addHandler(handler)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
 
 _MODULE_DIR = Path(__file__).resolve().parent
 _QUESTIONS_PATH = _MODULE_DIR / "questions.json"
@@ -20,13 +31,13 @@ def _write_results_json(records):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
     tmp_path.replace(_RESULTS_JSON_PATH)
-    print(f"Saved {_RESULTS_JSON_PATH}")
+    logger.debug(f"Saved {_RESULTS_JSON_PATH}")
 
 
 def pipeline():
     # 1. Setup Resources
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-    print(f'Using device: {device}')
+    logger.debug(f"Using device: {device}")
     
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-7B-Instruct", device)
     
@@ -38,6 +49,7 @@ def pipeline():
 
     fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
 
+    # 2. Set up evaluation
     engine = EvalEngine(llm=llm, retriever=retriever, fact_gen=fact_gen)
 
     with open(_QUESTIONS_PATH, "r", encoding="utf-8") as f:
@@ -47,9 +59,9 @@ def pipeline():
 
     for category, questions in questions_data.items():
         for question in questions:
-            print(f"\n{category}: {question}")
+            logger.debug(f"{category}: {question}")
 
-            print("Generating answers...")
+            logger.debug("Generating answers...")
             generations = sample_generations(
                 llm=llm,
                 question=question,
@@ -62,13 +74,13 @@ def pipeline():
                 base_seed=0,
             )
 
-            print("Evaluating metrics (SE, SumEigen, SAFE)...")
+            logger.debug("Evaluating metrics (SE, SumEigen, SAFE)...")
             metrics = engine.evaluate(generations, question)
             
             se = metrics["semantic_entropy"]
             su = metrics["sum_eigen"]
             safe_out = metrics["safe"]
-            print("DONE")
+            logger.debug("DONE")
 
             # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
@@ -102,7 +114,7 @@ def pipeline():
             
             _write_results_json(results)
 
-    print("\nFinished run.")
+    logger.debug("Finished run.")
 
 
 if __name__ == "__main__":

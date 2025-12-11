@@ -1,18 +1,14 @@
-from datasets import load_dataset
-from tqdm import tqdm
-from typing import Optional, List
 import logging
 import gc
 import random
 import os
 import json
+from typing import Optional, List
+from datasets import load_dataset
+from tqdm import tqdm
 from datasets.exceptions import DatasetGenerationError
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S"
-)
+logger = logging.getLogger("rag_uncertainty")
 
 def load_data(
     data_name: str,
@@ -36,21 +32,21 @@ def load_data(
     if articles_num is not None:
         cache_path = os.path.join(cache_dir, f"{data_name.replace('/', '_')}_{articles_num}.jsonl")
         if os.path.exists(cache_path):
-            logging.info(f"Found cached dataset at {cache_path}. Loading...")
+            logger.info(f"Found cached dataset at {cache_path}. Loading...")
             with open(cache_path, "r", encoding="utf-8") as f:
                 return [json.loads(line)["text"] for line in f]
     
     random.seed(seed)
-    logging.info(f"Loading dataset '{data_name}' (train split, non-streaming)...")
+    logger.info(f"Loading dataset '{data_name}' (train split, non-streaming)...")
 
     target_name = '20231101.en'
     try:
         dataset = load_dataset(data_name, streaming=False, name=target_name, split="train")
     except DatasetGenerationError:
-        logging.warning("Dataset generation error. Retrying with forced redownload...")
+        logger.warning("Dataset generation error. Retrying with forced redownload...")
         dataset = load_dataset(data_name, split="train", streaming=False, name=target_name, download_mode="force_redownload")
     except Exception as e:
-        logging.error(f"Failed to load dataset '{data_name}': {e}")
+        logger.error(f"Failed to load dataset '{data_name}': {e}")
         return []
 
     total = len(dataset)
@@ -60,18 +56,18 @@ def load_data(
         
         cache_path = os.path.join(cache_dir, f"{data_name.replace('/', '_')}_{articles_num}.jsonl")
         if os.path.exists(cache_path):
-            logging.info(f"Found cached full dataset at {cache_path}. Loading...")
+            logger.info(f"Found cached full dataset at {cache_path}. Loading...")
             with open(cache_path, "r", encoding="utf-8") as f:
                 return [json.loads(line)["text"] for line in f]
     else:
         cache_path = os.path.join(cache_dir, f"{data_name.replace('/', '_')}_{articles_num}.jsonl")
 
     if total > articles_num:
-        logging.info(f"Sampling {articles_num} articles from {total}...")
+        logger.info(f"Sampling {articles_num} articles from {total}...")
         indices = random.sample(range(total), k=articles_num)
         iterator = (dataset[i] for i in indices)
     else:
-        logging.info(f"Using all {total} articles...")
+        logger.info(f"Using all {total} articles...")
         iterator = iter(dataset)
 
     documents, count = [], 0
@@ -90,20 +86,20 @@ def load_data(
                 if i % 1000 == 0:
                     gc.collect()
             except Exception as inner_e:
-                logging.warning(f"Skipping record {i}: {inner_e}")
+                logger.warning(f"Skipping record {i}: {inner_e}")
                 continue
     except KeyboardInterrupt:
-        logging.warning("Interrupted by user — returning partial results.")
+        logger.warning("Interrupted by user — returning partial results.")
     except Exception as outer_e:
-        logging.error(f"Fatal error while iterating dataset: {outer_e}")
+        logger.error(f"Fatal error while iterating dataset: {outer_e}")
 
     try:
-        logging.info(f"Saving {len(documents)} chunks to {cache_path}...")
+        logger.info(f"Saving {len(documents)} chunks to {cache_path}...")
         with open(cache_path, "w", encoding="utf-8") as f:
             for chunk in documents:
                 f.write(json.dumps({"text": chunk}, ensure_ascii=False) + "\n")
-        logging.info("Cache saved successfully.")
+        logger.info("Cache saved successfully.")
     except Exception as e:
-        logging.warning(f"Failed to save cache: {e}")
+        logger.warning(f"Failed to save cache: {e}")
 
     return documents
