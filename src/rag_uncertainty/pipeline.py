@@ -70,10 +70,7 @@ def pipeline():
                 question=question,
                 retriever=retriever,
                 k_ctx=5,
-                n=5,
-                max_new_tokens=32,
-                temperature=0.1,
-                base_seed=0,
+                n=5
             )
 
             logger.debug(f'Prompt used: {generations['prompt_used']}')

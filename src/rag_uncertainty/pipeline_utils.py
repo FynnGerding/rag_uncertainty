@@ -161,8 +161,8 @@ def sample_generations(
     llm: LLM,
     question: str,
     retriever,
-    k_ctx: int = 3,
-    n: int = 1,
+    k_ctx: int = 5,
+    n: int = 5,
     max_new_tokens: int = 512,
     temperature: float = 0.5,
     ):
