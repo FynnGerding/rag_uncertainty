@@ -1,4 +1,4 @@
-# Inspired by https://github.com/google-deepmind/long-form-factuality/blob/main/eval/safe/search_augmented_factuality_eval.py
+# Inspired by https://github.com/google-deepmind/long-form-factuality/blob/main/eval/safe/
 
 import logging
 from atomic_facts import AtomicFactGenerator
@@ -104,17 +104,6 @@ def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 5):
     evidence = [_stringify(h) for h in hits][:top_k]
     return search_query, evidence
 
-
-def calculate_f1_at_k(supported_count: int, not_supported_count: int, K: int = 20) -> float:
-    """
-    Compute F1@K as described in SAFE: precision ignores irrelevant facts, recall is capped by K.
-    """
-    precision = supported_count / (supported_count + not_supported_count + 1e-9)
-    recall = min(supported_count / K, 1.0)
-    denom = precision + recall
-    return 0.0 if denom == 0 else 2 * (precision * recall) / denom
-
-
 def _rate_fact(
     *,
     claim: str,
@@ -152,7 +141,7 @@ Label (SUPPORTED or NOT_SUPPORTED only):"""
     return picked
 
 
-def safe_factuality(
+def rafe_factuality(
         generations: dict, # {"generated_texts": List[str], "logprobs": ...}
         question: str,
         llm,

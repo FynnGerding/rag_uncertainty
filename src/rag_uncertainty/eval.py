@@ -8,7 +8,7 @@ from TruthTorchLM.truth_methods.sum_eigen_uncertainty import SumEigenUncertainty
 
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
 from rag_uncertainty.retrievers import BM25Retriever
-from rag_uncertainty.safe import safe_factuality
+from rag_uncertainty.rafe import rafe_factuality
 from rag_uncertainty.pipeline_utils import LLM
 
 hf_logging.set_verbosity_error()

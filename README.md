@@ -34,17 +34,25 @@ Here, $U \approx 0$ implies robust support across the context window, while high
 
 Our implementatoins are based on **TruthTorchLM** ([GitHub](https://github.com/lexin-zhou/TruthTorchLM)).
 
-### Eemantic Entropy
+### Semantic Entropy (White-box)
 
-Add method summary here...
+**Paper:** Semantic Uncertainty [(arXiv)](https://arxiv.org/abs/2302.09664)
 
-### SumEigen
+This method addresses the issue where standard entropy metrics overestimate uncertainty by treating semantically equivalent sentences (e.g., "Paris is the capital" vs. "The capital is Paris") as distinct outcomes.
+* **Mechanism:** It generates multiple answers and clusters them by meaning using a bidirectional entailment check (NLI).
+* **Metric:** It sums the probabilities of sequences within each cluster to compute the entropy over **meanings** rather than tokens, requiring access to model logits.
 
-Add method summary here...
+### SumEigen (Black-box)
 
-## Long-Form Factuality: SAFE
+**Paper:** Generating with Confidence [(arXiv)](https://arxiv.org/abs/2305.19187)
 
-Our code is addapted from **Google DeepMind's Long-form Factuality** ([GitHub](https://github.com/google-deepmind/long-form-factuality)), making SAFE usable within a RAG context.
+Designed for closed-source models where token logits are unavailable, this approach quantifies the "semantic dispersion" of generated responses.
+* **Mechanism:** It generates multiple responses and computes a pairwise similarity matrix (using NLI entailment scores) to construct a graph Laplacian.
+* **Metric:** The uncertainty score ($U_{EigV}$) is the sum of the Laplacian's eigenvalues, which serves as a proxy for the number of distinct semantic clusters in the output.
+
+## Long-Form Factuality in RAG: RAFE (vs SAFE)
+
+We additionally propose RAFE (Retrieval-Augmented Factuality Estimation). Adapting Google DeepMind's [SAFE (Search-Augmented Factuality Estimation)](https://arxiv.org/pdf/2403.18802), we replace external Google Search steps with local context verification. Our code is addapted from **Google DeepMind's Long-form Factuality** ([GitHub](https://github.com/google-deepmind/long-form-factuality)) to measure factuality strictly against retrieved evidence (RAG) rather than open web search.
 
 ## Data Source
 
