@@ -180,16 +180,9 @@ def build_wikipedia_retriever(
     cache_path = Path(cache_dir)
     index_exists = cache_path.exists()
 
-    # Use cached index
-    if index_exists:
-        return BM25Retriever(documents=None, save_dir=cache_dir, load_if_exists=True)
-
-    # Load docs from JSON cache if available
     docs = _load_corpus_cache(data_cache_dir=data_cache_dir)
     if docs is None:
-        docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)    
-
-    # No index and no JSON: download
+        docs = _load_dataset_cache(dataset_name, data_cache_dir=data_cache_dir)
     if docs is None:
         if data_loader is None:
             try:
