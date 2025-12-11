@@ -132,41 +132,66 @@ def _text_from_hit(hit: Any) -> str:
         return str(getattr(hit, "text"))
     return _text_from_doc(hit)
 
-
-def build_prompt(question: str, retriever, k: int = 5) -> str:
-    """
-    Generic prompt builder that uses any retriever implementing:
-        retriever.search(query: str, top_k: int) -> List[RetrievedChunk or doc]
-    """
-    hits: List[Any] = retriever.search(question, top_k=k)
-    context_blocks = []
-    for i, h in enumerate(hits, 1):
-        context_blocks.append(f"[{i}] {_text_from_hit(h)}")
-    context = "\n\n".join(context_blocks) if context_blocks else "(no retrieved context)"
-
+def _qwen_prompt(system: str, user: str) -> str:
+    """Helper to format prompts for Qwen2.5 Instruct model."""
     return (
-        "You are a helpful assistant. Use the context to answer concisely.\n\n"
-        f"Context:\n{context}\n\n"
-        f"Question: {question}\n"
-        "Answer:"
+        f"<|im_start|>system\n{system}<|im_end|>\n"
+        f"<|im_start|>user\n{user}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
     )
 
+def build_rag_prompt(question: str, retriever, k: int = 5) -> str:
+    """
+    Constructs a Qwen 2.5 formatted RAG prompt.
+    """
+    # 1. Search
+    #    The retriever now returns RetrievedChunk objects with valid .text
+    hits: List[RetrievedChunk] = retriever.search(question, top_k=k)
+    
+    # 2. Format context blocks
+    context_blocks = []
+    for i, hit in enumerate(hits, 1):
+        # Access the .text attribute directly from the dataclass
+        content = hit.text.strip()
+        context_blocks.append(f"Document [{i}]:\n{content}")
+    
+    context_str = "\n\n".join(context_blocks) if context_blocks else "(No relevant context found)"
+
+    # 3. Construct Qwen Prompt
+    system_msg = (
+        "You are a precise research assistant. "
+        "Answer the user's question based strictly on the provided context blocks. "
+        "If the answer is not contained in the context, explicitly state that."
+    )
+    
+    user_msg = (
+        f"Context:\n{context_str}\n\n"
+        f"Question: {question}"
+    )
+
+    return _qwen_prompt(system_msg, user_msg)
+
 def sample_generations(
-    llm,
+    llm: LLM,
     question: str,
     retriever,
-    k_ctx: int,
-    n: int,
-    max_new_tokens: int = 128,
-    temperature: float = 0.9,
-    base_seed: int = 0,
+    k_ctx: int = 3,
+    n: int = 1,
+    max_new_tokens: int = 512,
+    temperature: float = 0.5,
+    base_seed: int = 42,
 ):
-    prompt = build_prompt(question, retriever, k=k_ctx)
+    """
+    Generates RAG answers using the LLM wrapper and Qwen formatting.
+    """
+    prompt = build_rag_prompt(question, retriever, k=k_ctx)
+    
     generated_texts = []
     logprobs_per_gen = []
 
-    for i in tqdm(range(n), desc="generations"):
+    for i in tqdm(range(n), desc="Generations"):
         seed = None if base_seed is None else (base_seed + i)
+        
         text, token_logprobs = llm.generate(
             prompt,
             max_new_tokens=max_new_tokens,
@@ -179,6 +204,7 @@ def sample_generations(
         logprobs_per_gen.append(token_logprobs)
 
     return {
+        "prompt_used": prompt,
         "generated_texts": generated_texts,
         "logprobs": logprobs_per_gen,
     }

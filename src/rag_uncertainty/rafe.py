@@ -4,6 +4,8 @@ import logging
 from atomic_facts import AtomicFactGenerator
 from typing import Dict, Any, List
 
+from rag_uncertainty.pipeline_utils import _qwen_prompt
+
 SUPPORTED = "SUPPORTED"
 NOT_SUPPORTED = "NOT_SUPPORTED"
 IRRELEVANT = "IRRELEVANT"
@@ -11,23 +13,16 @@ RELEVANT = "RELEVANT"
 
 logger = logging.getLogger("rag_uncertainty")
 
-def _qwen_prompt(system: str, user: str) -> str:
-    """Helper to format prompts for Qwen2.5/ChatML models."""
-    return (
-        f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n{user}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
-    )
-
 def _stringify(hit: Any) -> str:
     """Convert retriever results to plain strings."""
     if isinstance(hit, str):
         return hit
     if isinstance(hit, dict):
-        for key in ("text", "content", "body", "snippet"):
-            if key in hit and isinstance(hit[key], str):
-                return hit[key]
-    return str(hit)
+        for k in ("page_content", "text", "content", "body", "snippet"):
+            v = hit.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+    return ""
 
 def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
     """

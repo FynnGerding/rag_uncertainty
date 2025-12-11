@@ -77,6 +77,11 @@ def pipeline():
                 base_seed=0,
             )
 
+            logger.debug(f'Prompt used: {generations['prompt_used']}')
+            for i, answers in enumerate(generations['generated_texts']):
+                logger.debug(f"Answer {i}: {answers}")
+            
+
             logger.debug("Evaluating metrics (SE, SumEigen, RAFE, and CEM)")
             metrics = engine.evaluate(generations, question)
             logger.debug("Evaluating complete.")
