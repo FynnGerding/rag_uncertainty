@@ -1,136 +1,12 @@
-from pathlib import Path
-import sys
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-from TruthTorchLM.truth_methods.semantic_entropy import SemanticEntropy
-from TruthTorchLM.truth_methods.sum_eigen_uncertainty import SumEigenUncertainty
-
-import third_party
-from atomic_facts import AtomicFactGenerator
-from typing import Dict, Any, List, Tuple
-import numpy as np
-import torch
-
-def semantic_entropy(generations, question, **kwargs):
-    """
-    Compute Semantic Entropy from externally provided generations.
-
-    Parameters
-    ----------
-    generations : dict
-        Must include:
-          - "generated_texts": List[str]
-          - "logprobs": List[List[float]]  # token-level logprobs per generation
-        (Any extra fields are ignored.)
-    question : str
-        The original question/prompt (used for entailment clustering).
-    **kwargs :
-        Passed directly to SemanticEntropy(...), e.g.:
-          scoring_function, number_of_generations,
-          model_for_entailment, tokenizer_for_entailment,
-          entailment_model_device, batch_generation.
-
-    Returns
-    -------
-    dict
-        Matches SemanticEntropy.forward_api(...) output:
-          {
-            "truth_value": float,
-            "semantic_entropy": float,
-             "score_for_each_generation": List[float],
-            "generated_texts": List[str],
-            "clusters": List[Set[str]],
-          }
-    """
-    if "generated_texts" not in generations:
-        raise ValueError('`generations` must contain key "generated_texts".')
-    if "logprobs" not in generations:
-        raise ValueError('`generations` must contain key "logprobs" for semantic entropy.')
-
-    if "entailment_model_device" not in kwargs:
-        if torch.backends.mps.is_available():
-            kwargs["entailment_model_device"] = "mps"
-        else:
-            kwargs["entailment_model_device"] = "cpu"
-    se = SemanticEntropy(**kwargs)
-
-    # Because sampling is external, we only pass the precomputed dict.
-    return se.forward_api(
-        model="",
-        messages=[],
-        generated_text="",
-        question=question,
-        sampled_generations_dict=generations,
-    )
-
-
-def sum_eigen(generations, question, **kwargs):
-    """
-    Compute Sum Eigen Uncertainty (U_eigv) from externally provided generations.
-
-    Parameters
-    ----------
-    generations : dict
-        Must include:
-          - "generated_texts": List[str]
-        (Any extra fields are ignored.)
-    question : str
-        The original question/prompt (used for similarity).
-    **kwargs :
-        Passed directly to SumEigenUncertainty(...), e.g.:
-          method_for_similarity ("semantic" | "jaccard"),
-          number_of_generations, temperature,
-          model_for_entailment, tokenizer_for_entailment,
-          entailment_model_device, batch_generation.
-
-    Returns
-    -------
-    dict
-        Matches SumEigenUncertainty.forward_api(...) output:
-          {
-            "U_eigv": float,
-            "generated_texts": List[str],
-            "truth_value": float,
-          }
-    """
-    if "generated_texts" not in generations:
-        raise ValueError('`generations` must contain key "generated_texts".')
-
-    if "entailment_model_device" not in kwargs:
-        if torch.backends.mps.is_available():
-            kwargs["entailment_model_device"] = "mps"
-        else:
-            kwargs["entailment_model_device"] = "cpu"
-    se = SumEigenUncertainty(**kwargs)
-
-    # Because sampling is external, we only pass the precomputed dict.
-    return se.forward_api(
-        model="",
-        messages=[],
-        generated_text="",
-        question=question,
-        sampled_generations_dict=generations,
-    )
-
 # Inspired by https://github.com/google-deepmind/long-form-factuality/blob/main/eval/safe/search_augmented_factuality_eval.py
+
+from atomic_facts import AtomicFactGenerator
+from typing import Dict, Any, List
+
 SUPPORTED = "SUPPORTED"
 NOT_SUPPORTED = "NOT_SUPPORTED"
 IRRELEVANT = "IRRELEVANT"
 RELEVANT = "RELEVANT"
-
-def _get_text(gen_item: Any) -> str:
-    """Accepts plain string or dict with text/answer fields."""
-    if isinstance(gen_item, str):
-        return gen_item
-    if isinstance(gen_item, dict):
-        for k in ("text", "answer", "generation"):
-            if k in gen_item and isinstance(gen_item[k], str):
-                return gen_item[k]
-    raise TypeError(f"Invalid generation item: {type(gen_item)}")
-
 
 def _stringify(hit: Any) -> str:
     """Convert retriever results to plain strings."""
@@ -157,7 +33,9 @@ def _pick_label(raw: str) -> str:
 def _pick_relevance(raw: str) -> str:
     raw = raw.strip().upper()
     if "IRRELEV" in raw or "NOT RELEVANT" in raw or "OFF-TOPIC" in raw:
+        print(f"Decision: '{raw}' got assigned to IRRELEVANT")
         return IRRELEVANT
+    print(f"Decision: '{raw}' got assigned to RELEVANT")
     return RELEVANT
 
 
@@ -166,21 +44,26 @@ def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
     Rewrite an atomic fact so it is self-contained, replacing vague references with concrete entities.
     Falls back to the original fact if the model does not return a revision.
     """
-    prompt = f"""You rewrite atomic facts so they can be verified without extra context.
-Context:
-{original_context}
+    prompt = f"""Task: Rewrite the "Claim" to be self-contained by replacing pronouns (he, she, it, they) with specific names from the "Context".
+Rules:
+1. Output ONLY the rewritten sentence.
+2. Do not add new information.
+3. If the Claim cannot be resolved using the Context, return the Claim unchanged.
 
-Atomic fact:
-{atomic_fact}
+Context: The Apollo 13 mission was a critical lunar mission. It failed to land.
+Claim: It failed to land.
+Rewritten: The Apollo 13 mission failed to land.
 
-Task:
-- Replace pronouns or vague references with the specific entities from the Context.
-- Do not introduce any new facts.
-- Keep a single, self-contained sentence.
+Context: Steve Jobs co-founded Apple.
+Claim: He was forced out in 1985.
+Rewritten: Steve Jobs was forced out in 1985.
 
-Rewritten fact:"""
-    revised, _ = llm.generate(prompt, temperature=0.1, max_new_tokens=96, top_p=0.9)
+Context: {original_context}
+Claim: {atomic_fact}
+Rewritten:"""
+    revised, _ = llm.generate(prompt, temperature=0.1)
     revised = revised.strip()
+    print(f"Fact '{atomic_fact}' was revised to: '{revised}'")
     return revised or atomic_fact.strip()
 
 
@@ -189,6 +72,7 @@ def check_relevance(question: str, atomic_fact: str, answer_context: str, llm) -
     Determine whether an atomic fact helps answer the user's question.
     Returns RELEVANT or IRRELEVANT.
     """
+    print(f'Performing relevance check of atomic fact: {atomic_fact}')
     prompt = f"""You filter atomic facts for factuality evaluation.
 Question: {question}
 Answer (for context): {answer_context}
@@ -196,11 +80,11 @@ Atomic fact: {atomic_fact}
 
 Does this fact help answer the question? If it directly addresses, supports, or contradicts the question, it is RELEVANT. If it is background, tangential, or unrelated, it is IRRELEVANT.
 Respond with a short rationale followed by 'Label: RELEVANT' or 'Label: IRRELEVANT'."""
-    result, _ = llm.generate(prompt, temperature=0.1, max_new_tokens=64, top_p=0.9)
+    result, _ = llm.generate(prompt, temperature=0.0001, max_new_tokens=64) # Temperature to (near) zero as in SAFE paper
     return _pick_relevance(result)
 
 
-def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 3):
+def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 5):
     """
     Generate a verification query for a fact and retrieve evidence snippets.
     """
@@ -210,7 +94,7 @@ def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 3):
         "Write a concise search query that would retrieve evidence to verify whether this statement is true.\n"
         "Query:"
     )
-    search_query, _ = llm.generate(query_prompt, temperature=0.2, max_new_tokens=48, top_p=0.9)
+    search_query, _ = llm.generate(query_prompt, temperature=0.1)
     search_query = search_query.strip() or revised_fact
 
     hits = retriever.search(query=search_query, top_k=top_k)
@@ -237,6 +121,7 @@ def _rate_fact(
     rater,
     valid_labels: List[str] | None = None,
 ) -> str:
+    print(f"Rating claim: '{claim}'")
     """Ask rater to check if claim is supported."""
     valid_labels = valid_labels or [SUPPORTED, NOT_SUPPORTED]
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())
@@ -257,7 +142,7 @@ EVIDENCE:
 {joined_evidence or '(no evidence)'}
 
 Label (SUPPORTED or NOT_SUPPORTED only):"""
-    result, _ = rater.generate(prompt, temperature=0.001)
+    result, _ = rater.generate(prompt, temperature=0.01)
     picked = _pick_label(result)
     if picked not in valid_labels:
         return NOT_SUPPORTED
@@ -270,8 +155,8 @@ def safe_factuality(
         llm,
         *,
         retriever,
-        fact_gen,
-        top_k: int = 3,
+        fact_gen : AtomicFactGenerator,
+        top_k: int = 5,
         per_generation: bool = True,
     ) -> Dict[str, Any]:
 

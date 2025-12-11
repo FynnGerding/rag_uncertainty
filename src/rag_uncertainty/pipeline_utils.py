@@ -18,8 +18,8 @@ class LLM:
         self,
         prompt: str,
         max_new_tokens: int = 128,
-        temperature: float = 0.9,
-        top_p: float = 0.95,
+        temperature: float = 0.1,
+        top_p: float = 1.0,
         seed: int | None = None,
         return_logprobs: bool = False,
     ):

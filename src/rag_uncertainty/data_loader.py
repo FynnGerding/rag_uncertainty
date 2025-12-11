@@ -14,7 +14,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 
-def data(
+def load_data(
     data_name: str,
     articles_num: Optional[int] = None,  # Defaults to None (All)
     chunk_size: int = 300,

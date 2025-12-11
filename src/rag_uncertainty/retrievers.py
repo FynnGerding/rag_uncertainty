@@ -10,13 +10,12 @@ import bm25s
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 DEFAULT_WIKI_DATASET = "wikimedia/wikipedia"
 DEFAULT_DATA_CACHE_DIR = "data"
 DEFAULT_BM25_CACHE_DIR = "bm25_index_cache"
 
-# ---------------------------
-# Common Interface
-# ---------------------------
+# MARK: Extendable Interface
 
 @dataclass
 class RetrievedChunk:
@@ -26,15 +25,7 @@ class RetrievedChunk:
     meta: Optional[dict] = None            # e.g. full doc, title, span, etc.
 
 
-class Retriever(Protocol):
-    def search(self, query: str, top_k: int = 5) -> List[RetrievedChunk]:
-        """Return top_k chunks for a query."""
-        ...
-
-
-# ---------------------------
-# BM25 Retriever
-# ---------------------------
+# MARK: BM25 Retriever
 
 class BM25Retriever:
     """

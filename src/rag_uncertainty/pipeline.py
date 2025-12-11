@@ -1,20 +1,17 @@
 from pathlib import Path
-import csv
 import json
-
 import torch
 
-import retrievers
-from pipeline_utils import load_model_and_tokenizer, sample_generations
-from uncertainty_estimation import semantic_entropy, sum_eigen, safe_factuality
-import data
-from atomic_facts import AtomicFactGenerator
+from rag_uncertainty.atomic_facts import AtomicFactGenerator
+from rag_uncertainty.data_loader import load_data
+from rag_uncertainty.retrievers import build_wikipedia_retriever
+from rag_uncertainty.pipeline_utils import load_model_and_tokenizer, sample_generations
+from rag_uncertainty.eval import EvalEngine
 
 _MODULE_DIR = Path(__file__).resolve().parent
 _QUESTIONS_PATH = _MODULE_DIR / "questions.json"
 _RESULTS_DIR = Path.cwd() / "results"
 _RESULTS_JSON_PATH = _RESULTS_DIR / "results.json"
-_RESULTS_CSV_PATH = _RESULTS_DIR / "results.csv"
 
 
 def _write_results_json(records):
@@ -23,22 +20,25 @@ def _write_results_json(records):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
     tmp_path.replace(_RESULTS_JSON_PATH)
-    print(f"Saved {_RESULTS_JSON_PATH} (intermediate)")
+    print(f"Saved {_RESULTS_JSON_PATH}")
+
 
 def pipeline():
-    # pick device & load model
+    # 1. Setup Resources
     device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     print(f'Using device: {device}')
+    
     llm = load_model_and_tokenizer("Qwen/Qwen2.5-7B-Instruct", device)
-
-    # build retriever (handles cached index/data internally)
-    retriever = retrievers.build_wikipedia_retriever(
-        data_loader=data.data,
+    
+    retriever = build_wikipedia_retriever(
+        data_loader=load_data,
         cache_dir="bm25_index_cache",
         data_cache_dir="data",
     )
 
     fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
+
+    engine = EvalEngine(llm=llm, retriever=retriever, fact_gen=fact_gen)
 
     with open(_QUESTIONS_PATH, "r", encoding="utf-8") as f:
         questions_data = json.load(f)
@@ -47,9 +47,9 @@ def pipeline():
 
     for category, questions in questions_data.items():
         for question in questions:
-            print(f"{category}: {question}")
+            print(f"\n{category}: {question}")
 
-            print("Generation of answers...")
+            print("Generating answers...")
             generations = sample_generations(
                 llm=llm,
                 question=question,
@@ -62,24 +62,15 @@ def pipeline():
                 base_seed=0,
             )
 
-            print("DONE")
-            print("Building SE and SU...")
-            se = semantic_entropy(generations, question)
-            su = sum_eigen({"generated_texts": generations["generated_texts"]}, question)
-            print("DONE")
-
-            print("Building SAFE...")
-            safe_out = safe_factuality(
-                generations,
-                question,
-                llm,
-                retriever=retriever,
-                fact_gen=fact_gen,
-                top_k=5,
-                per_generation=True)
-
+            print("Evaluating metrics (SE, SumEigen, SAFE)...")
+            metrics = engine.evaluate(generations, question)
+            
+            se = metrics["semantic_entropy"]
+            su = metrics["sum_eigen"]
+            safe_out = metrics["safe"]
             print("DONE")
 
+            # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
                 gen_info = safe_out["per_generation"][str(gen_id)]
                 details = gen_info["details"]
@@ -91,11 +82,14 @@ def pipeline():
                     "answer": answer,
                     "atomic_facts": atomic_facts,
                     "safe_details": details,
+                    # SE
                     "semantic_entropy_global": se["semantic_entropy"],
                     "semantic_entropy_per_gen": se["score_for_each_generation"][gen_id],
                     "semantic_entropy_truth_value": se["truth_value"],
+                    # SU
                     "sum_eigen": su["U_eigv"],
                     "sum_eigen_truth_value": su["truth_value"],
+                    # SAFE
                     "safe_overall_score": safe_out["overall"]["score"],
                     "safe_gen_score": gen_info["score"],
                     "safe_gen_supported": gen_info["supported"],
@@ -105,12 +99,10 @@ def pipeline():
                 }
 
                 results.append(record)
+            
             _write_results_json(results)
 
     print("\nFinished run.")
-
-    if results:
-        print(f"Final outputs saved to {_RESULTS_JSON_PATH} and {_RESULTS_CSV_PATH}")
 
 
 if __name__ == "__main__":

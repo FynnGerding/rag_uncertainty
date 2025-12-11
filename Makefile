@@ -42,4 +42,4 @@ install: create-venv
 
 # 6. RUN: Execute the pipeline
 run:
-	$(PYTHON) src/rag_pipeline/pipeline.py
+	$(PYTHON) src/rag_uncertainty/pipeline.py

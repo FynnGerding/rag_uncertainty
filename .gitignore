@@ -210,5 +210,6 @@ __marimo__/
 # Specifics
 data/
 results/
+results*
 bm25_index_cache/
 notes.txt

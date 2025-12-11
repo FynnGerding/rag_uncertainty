@@ -25,7 +25,7 @@ Instead of measuring static agreement or centrality, we quantify sensitivity to 
 
 ## Data Source
 
-The questions in `src/rag_pipeline/questions.json` are taken from **Appendix E.6** of the paper [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
+The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix E.6** of the paper [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
 
 ## Code Adaptation: Uncertainty estimation measures
 
@@ -35,7 +35,7 @@ Due to compatibility constraints, we adapted specific logic directly into our co
 
 ## Repo Layout
 
-- `src/rag_pipeline/` – runnable package (entry point `pipeline.py`)
+- `src/rag_uncertainty/` – runnable package (entry point `pipeline.py`)
   - `pipeline.py` – orchestrates retrieval-augmented generation, uncertainty scoring, and writes `results.json/csv` (incrementally during a run).
   - `pipeline_utils.py` – wraps HF causal models for sampling and builds retrieval-aware prompts.
   - `retrievers.py` – BM25 and Contriever retrievers implementing a shared interface.
