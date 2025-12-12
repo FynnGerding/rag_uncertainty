@@ -92,7 +92,7 @@ def pipeline():
 
             # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
-                gen_info = rafe_gen_results[gen_id]
+                gen_info = rafe_out[gen_id]
                 details = gen_info["details"]
                 atomic_facts = [d["claim"] for d in details]
 
