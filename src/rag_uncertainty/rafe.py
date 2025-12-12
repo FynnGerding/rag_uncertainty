@@ -1,10 +1,12 @@
 # Inspired by https://github.com/google-deepmind/long-form-factuality/blob/main/eval/safe/
 
 import logging
-from atomic_facts import AtomicFactGenerator
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal, Optional
+import outlines
+from pydantic import BaseModel, Field
 
-from rag_uncertainty.pipeline_utils import _qwen_prompt
+from rag_uncertainty.pipeline_utils import _qwen_prompt, LLM
+from rag_uncertainty.atomic_facts import AtomicFactGenerator
 
 SUPPORTED = "SUPPORTED"
 NOT_SUPPORTED = "NOT_SUPPORTED"
@@ -20,97 +22,211 @@ def _get_text(hit: Any) -> str:
     
     raise ValueError(f"Retrieved hit of type '{type(hit).__name__}' has no '.text' attribute. Value: {hit}")
 
-def revise_fact(atomic_fact: str, original_context: str, llm) -> str:
+class AtomicClaim(BaseModel):
+    reasoning: str = Field(..., description="Briefly list pronouns to resolve or artifacts (like '- <fact>') to remove.")
+    revised_claim: str = Field(..., description="The final, self-contained, clean sentence.")
+
+def revise_fact(atomic_fact: str, original_context: str, llm: LLM) -> str:
     """
-    Rewrite an atomic fact so it is self-contained.
-    Uses unconstrained generation but within a strict chat template.
+    Cleans and decontextualizes an atomic fact using structured generation.
     """
     system_msg = (
-        "You are a helpful editor. Your task is to rewrite the 'Claim' to be self-contained "
-        "by replacing pronouns (he, she, it, they) with specific names from the 'Context'.\n"
-        "Rules:\n"
-        "1. Output ONLY the rewritten sentence.\n"
-        "2. Do not add new information.\n"
-        "3. If the Claim cannot be resolved using the Context, return the Claim unchanged."
-    )
-    
-    user_msg = (
-        f"Context: {original_context}\n"
-        f"Claim: {atomic_fact}\n"
-        "Rewritten:"
+        "You are a precise data cleaner. Your goal is to make the 'Claim' self-contained.\n"
+        "1. Replace pronouns (he/she/it/they) with specific names from 'Context'.\n"
+        "2. Remove formatting artifacts (e.g., bullets, '- <fact>', 'Statement:').\n"
+        "3. If the claim is already clear or cannot be resolved, return it clean but unchanged."
     )
 
-    prompt = _qwen_prompt(system_msg, user_msg)
+    history = [
+        # Turn 1
+        {
+            "role": "user",
+            "content": "Context: Armstrong commanded Apollo 11.\nClaim: He landed the Eagle safely."
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "Resolve \'He\' to \'Armstrong\'.", "revised_claim": "Armstrong landed the Eagle safely."}'
+        },
+        # Turn 2 "Artifact"
+        {
+            "role": "user",
+            "content": "Context: The Apollo program ended in 1972.\nClaim: - <fact> It was considered a major success."
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "Remove \'- <fact>\'. Resolve \'It\' to \'The Apollo program\'.", "revised_claim": "The Apollo program was considered a major success."}'
+        },
+        # Turn 3 "No Context"
+        {
+            "role": "user",
+            "content": "Context: (No relevant context)\nClaim: The mission failed."
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "No context to resolve specific mission.", "revised_claim": "The mission failed."}'
+        }
+    ]
+
+    final_user_content = f"Context: {original_context}\nClaim: {atomic_fact}"
+
+    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
     
-    revised, _ = llm.generate(prompt, temperature=0.1, constraint=r"[^\n]+")
+    for msg in history:
+        full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
     
-    revised = revised.strip()
-    logger.debug(f"Fact '{atomic_fact}' was revised to: '{revised}'")
-    return revised or atomic_fact.strip()
+    full_prompt += f"<|im_start|>user\n{final_user_content}<|im_end|>\n<|im_start|>assistant\n"
+
+    try:
+        result, _ = llm.generate(
+            full_prompt, 
+            constraint=AtomicClaim,
+            temperature=0.1,
+            max_new_tokens=256
+        )
+        logger.debug(f"Atomic fact: '{atomic_fact}' was revised to '{result.revised_claim}'")
+        return result.revised_claim
+        
+    except Exception as e:
+        logger.warning(f"Revision failed for fact '{atomic_fact[:30]}...': {e}")
+        # Fallback
+        return atomic_fact
 
 
-def check_relevance(question: str, atomic_fact: str, answer_context: str, llm) -> str:
+class RelevanceDecision(BaseModel):
+    rationale: str = Field(..., description="Explain why the fact helps (or doesn't help) answer the question.")
+    label: Literal["RELEVANT", "IRRELEVANT"] = Field(..., description="The final verdict.")
+
+def check_relevance(question: str, atomic_fact: str, answer_context: str, llm: LLM) -> str:
     """
     Determine whether an atomic fact helps answer the user's question.
-    Uses a regex constraint to force a 'Reasoning' -> 'Label' structure.
+    Uses structured generation to prevent logic errors.
     """
-    logger.debug(f"Performing relevance check of atomic fact: {atomic_fact}")
-    
     system_msg = (
-        "You filter atomic facts for factuality evaluation. "
-        "Does the Atomic Fact help answer the Question given the context?\n"
-        "If it directly addresses, supports, or contradicts the question, it is RELEVANT. "
-        "If it is background, tangential, or unrelated, it is IRRELEVANT."
+        "You are an impartial judge evaluating factual relevance.\n"
+        "Rules:\n"
+        "1. RELEVANT: The fact provides part of the answer, defines the subject, establishes necessary context (dates, locations), or directly addresses the prompt.\n"
+        "2. IRRELEVANT: The fact is off-topic, completely unrelated trivia, or meta-talk (e.g., 'The text says').\n"
+        "3. Contextual facts (who, what, where) ARE relevant."
     )
+
+    history = [
+        {
+            "role": "user",
+            "content": (
+                "Question: Who is Barack Obama?\n"
+                "Atomic Fact: Barack Obama served as the 44th US President.\n"
+                "Task: Is this fact relevant?"
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"rationale": "This defines who the subject is, which is the core of the answer.", "label": "RELEVANT"}'
+        },
+        {
+            "role": "user",
+            "content": (
+                "Question: How does photosynthesis work?\n"
+                "Atomic Fact: The scientist who discovered it was born in 1850.\n"
+                "Task: Is this fact relevant?"
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"rationale": "Biographical trivia about the scientist does not explain the biological process requested.", "label": "IRRELEVANT"}'
+        },
+        {
+            "role": "user",
+            "content": (
+                "Question: What happened during the Apollo 13 mission?\n"
+                "Atomic Fact: Apollo 13 was a lunar mission launched in 1970.\n"
+                "Task: Is this fact relevant?"
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"rationale": "It establishes the subject and timeline, which is necessary context for describing the event.", "label": "RELEVANT"}'
+        }
+    ]
     
-    user_msg = (
+    final_user_content = (
         f"Question: {question}\n"
-        f"Answer (for context): {answer_context}\n"
-        f"Atomic fact: {atomic_fact}\n\n"
-        "Respond with a short rationale (max 1 sentence) followed by the final Label."
+        f"Context (for reference): {answer_context}\n"
+        f"Atomic Fact: {atomic_fact}\n"
+        "Task: Is this fact relevant?"
     )
 
-    prompt = _qwen_prompt(system_msg, user_msg)
-    
-    # Force the model to output: "Rationale: ... \nLabel: RELEVANT|IRRELEVANT"
-    # This ensures we get Chain-of-Thought accuracy with structured parsing
-    structure_regex = r"Rationale: [^\n]+\nLabel: (RELEVANT|IRRELEVANT)"
-    
-    result, _ = llm.generate(
-        prompt, 
-        temperature=0.0, 
-        constraint=structure_regex,
-        max_new_tokens=128
-    )
-    
-    # Extract the label from the structured output
-    if "Label: RELEVANT" in result:
-        return RELEVANT
-    return IRRELEVANT
+    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+    for msg in history:
+        full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+    full_prompt += f"<|im_start|>user\n{final_user_content}<|im_end|>\n<|im_start|>assistant\n"
+
+    try:
+        result, _ = llm.generate(
+            full_prompt, 
+            constraint=RelevanceDecision,
+            temperature=0.0,
+            max_new_tokens=128
+        )
+        
+        logger.debug(f"Relevance atomic fact: '{atomic_fact}' was determined as '{result.label}'")
+        return result.label
+
+    except Exception as e:
+        logger.warning(f"Relevance check failed for fact '{atomic_fact[:30]}...': {e}")
+        return IRRELEVANT
 
 
-def retrieve_evidence(revised_fact: str, llm, retriever, top_k: int = 5):
+class SearchQuery(BaseModel):
+    query: str = Field(..., description="A neutral, keyword-optimized search string.")
+
+def retrieve_evidence(revised_fact: str, llm: LLM, retriever, top_k: int = 5):
     """
-    Generate a verification query using a constrained regex to ensure a clean single-line query.
+    Generates a targeted search query and retrieves evidence.
     """
-    system_msg = "You create concise Google search queries to fact-check statements."
-    user_msg = (
-        f"Statement: {revised_fact}\n"
-        "Write a concise search query that would retrieve evidence to verify whether this statement is true.\n"
-        "Query:"
+    history = [
+        {"role": "user", "content": "Statement: Apollo 13 failed due to an oxygen tank explosion."},
+        {"role": "assistant", "content": '{"query": "Apollo 13 oxygen tank explosion cause"}'},
+        
+        {"role": "user", "content": "Statement: Python was released in 1991."},
+        {"role": "assistant", "content": '{"query": "Python programming language release date"}'},
+    ]
+
+    system_msg = "You generate concise Google search queries to verify statements. remove stop words."
+    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+    
+    for msg in history:
+        full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+    
+    full_prompt += (
+        f"<|im_start|>user\nStatement: {revised_fact}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
     )
 
-    prompt = _qwen_prompt(system_msg, user_msg)
-    
-    # Regex constraint: Non-newline characters only
-    search_query, _ = llm.generate(prompt, temperature=0.1, constraint=r"[^\n]+")
-    
-    search_query = search_query.strip() or revised_fact
+    try:
+        result, _ = llm.generate(
+            full_prompt, 
+            constraint=SearchQuery,
+            temperature=0.1,
+            max_new_tokens=64
+        )
+        search_query = result.query
+        
+    except Exception as e:
+        search_query = revised_fact
 
     hits = retriever.search(query=search_query, top_k=top_k)
     evidence = [_get_text(h) for h in hits][:top_k]
     return search_query, evidence
 
+class FactualityVerdict(BaseModel):
+    reasoning: str = Field(
+        ..., 
+        description="Step-by-step comparison of the Claim vs. the Evidence. Quote the evidence if possible."
+    )
+    label: Literal["SUPPORTED", "NOT_SUPPORTED"] = Field(
+        ..., 
+        description="The final judgment. If evidence is missing/contradictory, use NOT_SUPPORTED."
+    )
 
 def _rate_fact(
     *,
@@ -118,41 +234,96 @@ def _rate_fact(
     question: str,
     answer: str,
     evidence: List[str],
-    rater,
-    valid_labels: List[str] | None = None,
+    rater: LLM,
+    valid_labels: Optional[List[str]] = None,
 ) -> str:
     """
-    Classify the claim using strict constrained generation (No parsing logic required).
+    Classifies a claim using Chain-of-Thought reasoning and strict schema validation.
     """
-    logger.debug(f"Rating claim: '{claim}'")
-    valid_labels = valid_labels or [SUPPORTED, NOT_SUPPORTED]
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())
     
     system_msg = (
-        "You are a strict factuality checker.\n"
-        "Given the QUESTION, ANSWER, and EVIDENCE, classify the CLAIM as one of: "
-        f"{', '.join(valid_labels)}.\n"
-        "If evidence is missing or inconclusive, choose NOT_SUPPORTED."
+        "You are a strict factuality judge. Your job is to verify if the 'CLAIM' is supported by the 'EVIDENCE'.\n"
+        "Rules:\n"
+        "1. SUPPORTED: The claim is clearly and directly backed by the provided evidence.\n"
+        "2. NOT_SUPPORTED: The evidence contradicts the claim OR the evidence is missing/unrelated.\n"
+        "3. Ignore your own knowledge. Rely ONLY on the provided EVIDENCE list."
     )
+
+    # Few-Shot Example
+    history = [
+        {
+            "role": "user",
+            "content": (
+                "QUESTION: Who walked on the moon?\n"
+                "ANSWER: Armstrong walked on the moon.\n"
+                "CLAIM: Armstrong walked on the moon.\n"
+                "EVIDENCE: - Neil Armstrong was the first person to walk on the Moon in 1969.\n"
+                "Task: Verify the claim."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "The evidence explicitly states Armstrong walked on the Moon. The claim matches the evidence.", "label": "SUPPORTED"}'
+        },
+        {
+            "role": "user",
+            "content": (
+                "QUESTION: When was Python released?\n"
+                "ANSWER: It was released in 1991.\n"
+                "CLAIM: Python was released in 1991.\n"
+                "EVIDENCE: - Python is a high-level programming language.\n- Guido van Rossum created it.\n"
+                "Task: Verify the claim."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "The evidence confirms Python is a language and mentions the creator, but NO evidence mentions the year 1991. Therefore, it cannot be verified.", "label": "NOT_SUPPORTED"}'
+        },
+        {
+            "role": "user",
+            "content": (
+                "QUESTION: Is the sky blue?\n"
+                "ANSWER: The sky is blue.\n"
+                "CLAIM: The sky is green.\n"
+                "EVIDENCE: - Rayleigh scattering causes the sky to appear blue.\n"
+                "Task: Verify the claim."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "The claim says green, but the evidence explicitly says blue. This is a direct contradiction.", "label": "NOT_SUPPORTED"}'
+        }
+    ]
     
-    user_msg = (
+    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+    for msg in history:
+        full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+    
+    final_user_content = (
         f"QUESTION: {question}\n"
         f"ANSWER: {answer}\n"
         f"CLAIM: {claim}\n"
-        f"EVIDENCE: {joined_evidence or '(no evidence)'}\n\n"
-        "Label:"
+        f"EVIDENCE: {joined_evidence or '(no evidence provided)'}\n"
+        "Task: Verify the claim."
     )
+    
+    full_prompt += f"<|im_start|>user\n{final_user_content}<|im_end|>\n<|im_start|>assistant\n"
 
-    prompt = _qwen_prompt(system_msg, user_msg)
-    
-    # Dynamically build regex from valid labels e.g., "(SUPPORTED|NOT_SUPPORTED)"
-    label_options = "|".join(valid_labels)
-    constraint_regex = f"({label_options})"
-    
-    # The model acts as a classifier here, outputting ONLY the label
-    label, _ = rater.generate(prompt, temperature=0.0, constraint=constraint_regex)
-    
-    return label
+    try:
+        result, _ = rater.generate(
+            full_prompt, 
+            constraint=FactualityVerdict,
+            temperature=0.0,
+            max_new_tokens=256
+        )
+        
+        logger.debug(f"Rated claim '{claim[:30]}...' -> {result.label} (Reasoning: {result.reasoning})")
+        return result.label
+
+    except Exception as e:
+        logger.warning(f"Rating failed for claim '{claim[:30]}...': {e}")
+        return NOT_SUPPORTED
 
 
 def rafe_factuality(

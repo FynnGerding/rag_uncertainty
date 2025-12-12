@@ -213,3 +213,5 @@ results/
 results*
 bm25_index_cache/
 notes.txt
+.logs/
+run_pipeline.sh

@@ -114,7 +114,6 @@ class EvalEngine:
                     continue
                 
                 calculator = self.metrics[name]
-                # Pass necessary args to forward_api, ignoring unused ones for RafeWrapper
                 results[name] = calculator.forward_api(
                     model="", 
                     messages=[], 

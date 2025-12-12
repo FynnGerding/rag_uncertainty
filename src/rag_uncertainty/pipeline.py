@@ -60,9 +60,12 @@ def pipeline():
 
     results = []
 
-    for category, questions in questions_data.items():
-        for question in questions:
-            logger.debug(f"{category}: {question}")
+    num_categories = len(list(questions_data.keys()))
+
+    for i, (category, questions) in enumerate(questions_data.items()):
+        num_questions = len(questions)
+        for j, question in enumerate(questions):
+            logger.debug(f"Category ({i}/{num_categories}): {category}; Question ({j}/{num_questions}): {question}")
 
             logger.debug("Generating answers.")
             generations = sample_generations(

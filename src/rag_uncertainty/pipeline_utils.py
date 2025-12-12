@@ -6,6 +6,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Any, List
 from tqdm.auto import tqdm
 from typing import Optional, Union
+from pydantic import BaseModel
 
 from rag_uncertainty.retrievers import RetrievedChunk
 
@@ -29,7 +30,7 @@ class LLM:
         max_new_tokens: int = 128,
         temperature: float = 0.0, 
         seed: Optional[int] = None,
-        constraint: Optional[Union[str, type]] = None, 
+        constraint: Optional[Union[str, type, BaseModel]] = None,
         return_logprobs: bool = False,
     ):
         if seed is not None:
@@ -44,7 +45,10 @@ class LLM:
         # 2. Generate
         continuation = generator(prompt, max_tokens=max_new_tokens)
 
-        continuation_str = str(continuation)
+        if isinstance(constraint, type) and issubclass(constraint, BaseModel):
+            continuation_str = continuation.model_dump_json()
+        else:
+            continuation_str = str(continuation)
 
         if not return_logprobs:
             return continuation, None
@@ -72,12 +76,16 @@ class LLM:
         # Compile new generator
         if constraint is None:
             gen = generate.text(self.model, sampler=sampler)
+            
         elif isinstance(constraint, str):
-            # Assume Regex
             gen = generate.regex(self.model, constraint, sampler=sampler)
+            
+        elif isinstance(constraint, type) and issubclass(constraint, BaseModel):
+            gen = generate.json(self.model, constraint, sampler=sampler)
+            
         elif constraint in [int, float, bool]:
-            # Native Types
             gen = generate.format(self.model, constraint, sampler=sampler)
+            
         else:
             raise ValueError(f"Unsupported constraint type: {constraint}")
 
