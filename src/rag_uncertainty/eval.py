@@ -30,7 +30,7 @@ class RafeWrapper:
             retriever=self.retriever,
             fact_gen=self.fact_gen,
             top_k=5,
-            per_generation=True
+            K=10,
         )
 
 class EvalEngine:
@@ -81,7 +81,6 @@ class EvalEngine:
                 )
             )
 
-            # Register RAFE only if dependencies are provided
             if llm and retriever and fact_gen:
                 self._register_metric(
                     "rafe",

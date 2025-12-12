@@ -50,7 +50,7 @@ def pipeline():
     )
     logger.info("Wikipedia Retriever successfully loaded.")
 
-    fact_gen = AtomicFactGenerator(llm=llm, is_bio=False)
+    fact_gen = AtomicFactGenerator(llm=llm)
 
     # 2. Set up evaluation
     engine = EvalEngine(llm=llm, retriever=retriever, fact_gen=fact_gen)
@@ -92,7 +92,7 @@ def pipeline():
 
             # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
-                gen_info = rafe_out["per_generation"][str(gen_id)]
+                gen_info = rafe_gen_results[gen_id]
                 details = gen_info["details"]
                 atomic_facts = [d["claim"] for d in details]
 
@@ -110,7 +110,7 @@ def pipeline():
                     "sum_eigen": su["U_eigv"],
                     "sum_eigen_truth_value": su["truth_value"],
                     # RAFE
-                    "rafe_overall_score": rafe_out["overall"]["score"],
+                    "rafe_overall_score": rafe_out["score"],
                     "rafe_gen_score": gen_info["score"],
                     "rafe_gen_supported": gen_info["supported"],
                     "rafe_gen_not_supported": gen_info["not_supported"],

@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Literal, Optional
 import outlines
 from pydantic import BaseModel, Field
 
-from rag_uncertainty.pipeline_utils import _qwen_prompt, LLM
+from rag_uncertainty.pipeline_utils import LLM
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
 
 SUPPORTED = "SUPPORTED"
@@ -19,61 +19,50 @@ def _get_text(hit: Any) -> str:
     """Extract text from retriever result."""
     if hasattr(hit, "text"):
         return str(hit.text)
-    
     raise ValueError(f"Retrieved hit of type '{type(hit).__name__}' has no '.text' attribute. Value: {hit}")
 
+# MARK: Fact Revision (Self-Containment)
+
 class AtomicClaim(BaseModel):
-    reasoning: str = Field(..., description="Briefly list pronouns to resolve or artifacts (like '- <fact>') to remove.")
-    revised_claim: str = Field(..., description="The final, self-contained, clean sentence.")
+    reasoning: str = Field(..., description="Plan: 1. Identify pronouns/ambiguities. 2. Find their referents in Context.")
+    revised_claim: str = Field(..., description="The final, self-contained sentence with full entity names.")
 
 def revise_fact(atomic_fact: str, original_context: str, llm: LLM) -> str:
     """
-    Cleans and decontextualizes an atomic fact using structured generation.
+    Cleans an atomic fact by resolving pronouns and making it self-contained.
     """
     system_msg = (
-        "You are a precise data cleaner. Your goal is to make the 'Claim' self-contained.\n"
-        "1. Replace pronouns (he/she/it/they) with specific names from 'Context'.\n"
-        "2. Remove formatting artifacts (e.g., bullets, '- <fact>', 'Statement:').\n"
-        "3. If the claim is already clear or cannot be resolved, return it clean but unchanged."
+        "You are an expert editor. Your goal is to make the 'Claim' self-contained and searchable.\n"
+        "1. Aggressively resolve pronouns (he/she/it/they) to full names from 'Context'.\n"
+        "2. Replace vague terms like 'the mission' or 'the company' with specific entities (e.g., 'Apollo 13').\n"
+        "3. Remove structural artifacts (e.g., '- <fact>', 'However,').\n"
+        "4. If the claim is already clear, return it unchanged."
     )
 
     history = [
-        # Turn 1
         {
             "role": "user",
-            "content": "Context: Armstrong commanded Apollo 11.\nClaim: He landed the Eagle safely."
+            "content": "Context: Mattingly was removed from the Apollo 13 crew.\nClaim: He was replaced by Swigert."
         },
         {
             "role": "assistant",
-            "content": '{"reasoning": "Resolve \'He\' to \'Armstrong\'.", "revised_claim": "Armstrong landed the Eagle safely."}'
+            "content": '{"reasoning": "Resolve \'He\' to \'Mattingly\'.", "revised_claim": "Mattingly was replaced by Swigert."}'
         },
-        # Turn 2 "Artifact"
         {
             "role": "user",
-            "content": "Context: The Apollo program ended in 1972.\nClaim: - <fact> It was considered a major success."
+            "content": "Context: The Apollo 13 mission failed.\nClaim: However, the mission is considered a 'successful failure'."
         },
         {
             "role": "assistant",
-            "content": '{"reasoning": "Remove \'- <fact>\'. Resolve \'It\' to \'The Apollo program\'.", "revised_claim": "The Apollo program was considered a major success."}'
-        },
-        # Turn 3 "No Context"
-        {
-            "role": "user",
-            "content": "Context: (No relevant context)\nClaim: The mission failed."
-        },
-        {
-            "role": "assistant",
-            "content": '{"reasoning": "No context to resolve specific mission.", "revised_claim": "The mission failed."}'
+            "content": '{"reasoning": "Remove \'However,\'. Resolve \'the mission\' to \'Apollo 13\'.", "revised_claim": "Apollo 13 is considered a \'successful failure\'."}'
         }
     ]
 
     final_user_content = f"Context: {original_context}\nClaim: {atomic_fact}"
 
     full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
-    
     for msg in history:
         full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
-    
     full_prompt += f"<|im_start|>user\n{final_user_content}<|im_end|>\n<|im_start|>assistant\n"
 
     try:
@@ -83,76 +72,60 @@ def revise_fact(atomic_fact: str, original_context: str, llm: LLM) -> str:
             temperature=0.1,
             max_new_tokens=256
         )
-        logger.debug(f"Atomic fact: '{atomic_fact}' was revised to '{result.revised_claim}'")
+        logger.debug(f"Revised: '{atomic_fact}' -> '{result.revised_claim}'")
         return result.revised_claim
-        
     except Exception as e:
-        logger.warning(f"Revision failed for fact '{atomic_fact[:30]}...': {e}")
-        # Fallback
+        logger.warning(f"Revision failed: {e}")
         return atomic_fact
 
 
+# MARK: Relevance Check (Verifiability Filter)
+
 class RelevanceDecision(BaseModel):
-    rationale: str = Field(..., description="Explain why the fact helps (or doesn't help) answer the question.")
+    rationale: str = Field(..., description="Does this claim describe the world/subject? Or is it meta-talk?")
     label: Literal["RELEVANT", "IRRELEVANT"] = Field(..., description="The final verdict.")
 
 def check_relevance(question: str, atomic_fact: str, answer_context: str, llm: LLM) -> str:
     """
-    Determine whether an atomic fact helps answer the user's question.
-    Uses structured generation to prevent logic errors.
+    Determine if a fact is a verifiable claim about the world (RELEVANT) or meta-talk (IRRELEVANT).
     """
     system_msg = (
-        "You are an impartial judge evaluating factual relevance.\n"
-        "Rules:\n"
-        "1. RELEVANT: The fact provides part of the answer, defines the subject, establishes necessary context (dates, locations), or directly addresses the prompt.\n"
-        "2. IRRELEVANT: The fact is off-topic, completely unrelated trivia, or meta-talk (e.g., 'The text says').\n"
-        "3. Contextual facts (who, what, where) ARE relevant."
+        "You are a filter for an automated fact-checking system. "
+        "Your goal is to label the 'Atomic Fact' based on whether it is a verifiable claim about the world.\n"
+        "Labels:\n"
+        "1. RELEVANT: Any claim about the subject matter (definitions, dates, events, background info). "
+        "Even if it is basic or generic, if it is about the topic, it is RELEVANT.\n"
+        "2. IRRELEVANT: \n"
+        "   - Meta-statements about the text (e.g., 'The text says', 'details are not provided').\n"
+        "   - Refusals (e.g., 'I cannot answer').\n"
+        "   - Subjective transitions (e.g., 'Let's look at')."
     )
 
     history = [
+        # Case 1: Background info -> RELEVANT
         {
             "role": "user",
-            "content": (
-                "Question: Who is Barack Obama?\n"
-                "Atomic Fact: Barack Obama served as the 44th US President.\n"
-                "Task: Is this fact relevant?"
-            )
+            "content": "Question: What happened in Apollo 13?\nAtomic Fact: Apollo 13 was a lunar mission.\nTask: Label relevance."
         },
         {
             "role": "assistant",
-            "content": '{"rationale": "This defines who the subject is, which is the core of the answer.", "label": "RELEVANT"}'
+            "content": '{"rationale": "It is a factual claim describing the Apollo 13 mission (the subject).", "label": "RELEVANT"}'
         },
+        # Case 2: Meta-statement / Missing info -> IRRELEVANT
         {
             "role": "user",
-            "content": (
-                "Question: How does photosynthesis work?\n"
-                "Atomic Fact: The scientist who discovered it was born in 1850.\n"
-                "Task: Is this fact relevant?"
-            )
+            "content": "Question: What happened in Apollo 13?\nAtomic Fact: The specific details of the mission are not provided.\nTask: Label relevance."
         },
         {
             "role": "assistant",
-            "content": '{"rationale": "Biographical trivia about the scientist does not explain the biological process requested.", "label": "IRRELEVANT"}'
-        },
-        {
-            "role": "user",
-            "content": (
-                "Question: What happened during the Apollo 13 mission?\n"
-                "Atomic Fact: Apollo 13 was a lunar mission launched in 1970.\n"
-                "Task: Is this fact relevant?"
-            )
-        },
-        {
-            "role": "assistant",
-            "content": '{"rationale": "It establishes the subject and timeline, which is necessary context for describing the event.", "label": "RELEVANT"}'
+            "content": '{"rationale": "This describes the lack of information in the text, not the mission itself. It is a meta-statement.", "label": "IRRELEVANT"}'
         }
     ]
     
     final_user_content = (
         f"Question: {question}\n"
-        f"Context (for reference): {answer_context}\n"
         f"Atomic Fact: {atomic_fact}\n"
-        "Task: Is this fact relevant?"
+        "Task: Label relevance."
     )
 
     full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
@@ -167,40 +140,33 @@ def check_relevance(question: str, atomic_fact: str, answer_context: str, llm: L
             temperature=0.0,
             max_new_tokens=128
         )
-        
-        logger.debug(f"Relevance atomic fact: '{atomic_fact}' was determined as '{result.label}'")
+        logger.debug(f"Relevance: '{atomic_fact}' -> '{result.label}'")
         return result.label
-
     except Exception as e:
-        logger.warning(f"Relevance check failed for fact '{atomic_fact[:30]}...': {e}")
+        logger.warning(f"Relevance check failed: {e}")
         return IRRELEVANT
 
+# MARK: Evidence Retrieval (Query Generation)
 
 class SearchQuery(BaseModel):
     query: str = Field(..., description="A neutral, keyword-optimized search string.")
 
 def retrieve_evidence(revised_fact: str, llm: LLM, retriever, top_k: int = 5):
     """
-    Generates a targeted search query and retrieves evidence.
+    Generates a targeted search query from the fact, then retrieves evidence.
     """
     history = [
         {"role": "user", "content": "Statement: Apollo 13 failed due to an oxygen tank explosion."},
         {"role": "assistant", "content": '{"query": "Apollo 13 oxygen tank explosion cause"}'},
-        
         {"role": "user", "content": "Statement: Python was released in 1991."},
         {"role": "assistant", "content": '{"query": "Python programming language release date"}'},
     ]
 
-    system_msg = "You generate concise Google search queries to verify statements. remove stop words."
+    system_msg = "You generate concise Google search queries to verify statements. Remove stop words."
     full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
-    
     for msg in history:
         full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
-    
-    full_prompt += (
-        f"<|im_start|>user\nStatement: {revised_fact}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
-    )
+    full_prompt += f"<|im_start|>user\nStatement: {revised_fact}<|im_end|>\n<|im_start|>assistant\n"
 
     try:
         result, _ = llm.generate(
@@ -210,23 +176,18 @@ def retrieve_evidence(revised_fact: str, llm: LLM, retriever, top_k: int = 5):
             max_new_tokens=64
         )
         search_query = result.query
-        
-    except Exception as e:
+    except Exception:
         search_query = revised_fact
 
     hits = retriever.search(query=search_query, top_k=top_k)
     evidence = [_get_text(h) for h in hits][:top_k]
     return search_query, evidence
 
+# MARK: Fact Rating
+
 class FactualityVerdict(BaseModel):
-    reasoning: str = Field(
-        ..., 
-        description="Step-by-step comparison of the Claim vs. the Evidence. Quote the evidence if possible."
-    )
-    label: Literal["SUPPORTED", "NOT_SUPPORTED"] = Field(
-        ..., 
-        description="The final judgment. If evidence is missing/contradictory, use NOT_SUPPORTED."
-    )
+    reasoning: str = Field(..., description="Step-by-step comparison of the Claim vs. the Evidence.")
+    label: Literal["SUPPORTED", "NOT_SUPPORTED"] = Field(..., description="Final verdict.")
 
 def _rate_fact(
     *,
@@ -234,11 +195,10 @@ def _rate_fact(
     question: str,
     answer: str,
     evidence: List[str],
-    rater: LLM,
-    valid_labels: Optional[List[str]] = None,
-) -> str:
+    rater: LLM
+    ) -> str:
     """
-    Classifies a claim using Chain-of-Thought reasoning and strict schema validation.
+    Classifies a claim as SUPPORTED or NOT_SUPPORTED based on evidence.
     """
     joined_evidence = "\n".join(f"- {e}" for e in evidence if e.strip())
     
@@ -250,7 +210,6 @@ def _rate_fact(
         "3. Ignore your own knowledge. Rely ONLY on the provided EVIDENCE list."
     )
 
-    # Few-Shot Example
     history = [
         {
             "role": "user",
@@ -278,21 +237,7 @@ def _rate_fact(
         },
         {
             "role": "assistant",
-            "content": '{"reasoning": "The evidence confirms Python is a language and mentions the creator, but NO evidence mentions the year 1991. Therefore, it cannot be verified.", "label": "NOT_SUPPORTED"}'
-        },
-        {
-            "role": "user",
-            "content": (
-                "QUESTION: Is the sky blue?\n"
-                "ANSWER: The sky is blue.\n"
-                "CLAIM: The sky is green.\n"
-                "EVIDENCE: - Rayleigh scattering causes the sky to appear blue.\n"
-                "Task: Verify the claim."
-            )
-        },
-        {
-            "role": "assistant",
-            "content": '{"reasoning": "The claim says green, but the evidence explicitly says blue. This is a direct contradiction.", "label": "NOT_SUPPORTED"}'
+            "content": '{"reasoning": "The evidence confirms Python is a language, but NO evidence mentions the year 1991. Missing evidence = Not Supported.", "label": "NOT_SUPPORTED"}'
         }
     ]
     
@@ -317,14 +262,13 @@ def _rate_fact(
             temperature=0.0,
             max_new_tokens=256
         )
-        
-        logger.debug(f"Rated claim '{claim[:30]}...' -> {result.label} (Reasoning: {result.reasoning})")
+        logger.debug(f"Rating: '{claim}' -> {result.label}\n")
         return result.label
-
     except Exception as e:
-        logger.warning(f"Rating failed for claim '{claim[:30]}...': {e}")
+        logger.warning(f"Rating failed: {e}")
         return NOT_SUPPORTED
 
+# MARK: RAFE loop
 
 def rafe_factuality(
         generations: dict, 
@@ -332,76 +276,46 @@ def rafe_factuality(
         llm,
         *,
         retriever,
-        fact_gen : AtomicFactGenerator,
+        fact_gen: AtomicFactGenerator,
         top_k: int = 5,
-        per_generation: bool = True,
+        K: int = 10,  # F1@K parameter (human-preferred fact count)
     ) -> Dict[str, Any]:
 
-    overall_sup = overall_not = overall_irrel = 0
-    overall_context_relevant = 0
-    per_gen: Dict[str, Any] = {}
+    f1_scores = []
+    total_sup = 0
+    total_not = 0
+    total_irrel = 0
 
-    for gid, answer in enumerate(generations["generated_texts"]):
+    for answer in generations["generated_texts"]:
         atomic_pairs, _ = fact_gen.run(answer)
+        
+        # Flatten and deduplicate atomic facts
+        unique_facts = {f.strip() for _, facts in atomic_pairs for f in facts if f.strip()}
+        
+        g_sup = 0
+        g_not = 0
 
-        fact_entries = []
-        for sent, facts in atomic_pairs:
-            for fact in facts:
-                fact_text = fact.strip()
-                if fact_text:
-                    fact_entries.append({"fact": fact_text, "context": sent})
-
-        deduped_facts = []
-        seen = set()
-        for entry in fact_entries:
-            if entry["fact"] in seen:
-                continue
-            seen.add(entry["fact"])
-            deduped_facts.append(entry)
-
-        g_sup = g_not = g_irrel = 0
-        details = []
-        collected_evidence: List[str] = []
-
-        for entry in deduped_facts:
-            raw_claim = entry["fact"]
-            original_context = answer 
+        for raw_claim in unique_facts:
+            # 1. Revise (Self-Containment)
+            revised_claim = revise_fact(raw_claim, answer, llm)
             
-            revised_claim = revise_fact(raw_claim, original_context, llm)
-            
-            relevance = check_relevance(
-                question=question,
-                atomic_fact=revised_claim,
-                answer_context=answer,
-                llm=llm,
-            )
-
-            if relevance == IRRELEVANT:
-                g_irrel += 1
-                details.append(
-                    {
-                        "claim": revised_claim,
-                        "original_claim": raw_claim,
-                        "relevance": relevance,
-                        "label": IRRELEVANT,
-                        "search_query": None,
-                        "evidence": [],
-                    }
-                )
+            # 2. Check Relevance (Verifiability)
+            if check_relevance(question, revised_claim, answer, llm) == IRRELEVANT:
+                total_irrel += 1
                 continue
 
-            search_query, evidence = retrieve_evidence(
+            # 3. Retrieve Evidence (Query Generation)
+            _, evidence = retrieve_evidence(
                 revised_claim, llm=llm, retriever=retriever, top_k=top_k
             )
-            collected_evidence.extend(evidence)
 
+            # 4. Rate Fact
             label = _rate_fact(
                 claim=revised_claim,
                 question=question,
                 answer=answer,
                 evidence=evidence,
-                rater=llm,
-                valid_labels=[SUPPORTED, NOT_SUPPORTED],
+                rater=llm
             )
 
             if label == SUPPORTED:
@@ -409,70 +323,30 @@ def rafe_factuality(
             else:
                 g_not += 1
 
-            details.append(
-                {
-                    "claim": revised_claim,
-                    "original_claim": raw_claim,
-                    "relevance": relevance,
-                    "label": label,
-                    "search_query": search_query,
-                    "evidence": evidence,
-                }
-            )
-
-        # Build recall denominator from retrieved context
-        context_text = "\n".join(collected_evidence).strip()
-        if not context_text:
-            # fallback: retrieve using the question to build context
-            fallback_hits = retriever.search(query=question, top_k=top_k)
-            context_text = "\n".join(_get_text(h) for h in fallback_hits).strip()
-
-        total_relevant_context_facts = 0
-        if context_text:
-            context_atomic_pairs, _ = fact_gen.run(context_text)
-            context_claims = [c for _, facts in context_atomic_pairs for c in facts if c]
-            for c_claim in context_claims:
-                rel = check_relevance(question, c_claim, context_text, llm)
-                if rel == RELEVANT:
-                    total_relevant_context_facts += 1
-        recall_denom = max(total_relevant_context_facts, 1)
-
+        # Calculate F1@K for this generation
+        # Precision: Proportion of verified facts among all relevant facts generated
         precision = g_sup / (g_sup + g_not + 1e-9)
-        recall = g_sup / recall_denom
-        f1_score = 0.0 if (precision + recall) == 0 else 2 * (precision * recall) / (precision + recall)
+        
+        # Recall: Proportion of supported facts against ideal length K
+        recall = min(g_sup / K, 1.0)
+        
+        if (precision + recall) == 0:
+            f1 = 0.0
+        else:
+            f1 = 2 * (precision * recall) / (precision + recall)
+            
+        f1_scores.append(f1)
+        total_sup += g_sup
+        total_not += g_not
 
-        if per_generation:
-            total = g_sup + g_not + g_irrel
-            per_gen[str(gid)] = {
-                "score": f1_score,
-                "supported": g_sup,
-                "not_supported": g_not,
-                "irrelevant": g_irrel,
-                "context_relevant_facts": total_relevant_context_facts,
-                "precision": precision,
-                "recall": recall,
-                "total_claims": total,
-                "details": details,
-            }
+    # Aggregate Metrics
+    avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
+    overall_precision = total_sup / (total_sup + total_not + 1e-9)
 
-        overall_sup += g_sup
-        overall_not += g_not
-        overall_irrel += g_irrel
-        overall_context_relevant += total_relevant_context_facts
-
-    overall_total = overall_sup + overall_not + overall_irrel
-    overall_precision = overall_sup / (overall_sup + overall_not + 1e-9)
-    overall_recall = overall_sup / max(overall_context_relevant, 1)
-    overall_f1 = 0.0 if (overall_precision + overall_recall) == 0 else 2 * (overall_precision * overall_recall) / (overall_precision + overall_recall)
-    overall = {
-        "score": overall_f1,
-        "supported": overall_sup,
-        "not_supported": overall_not,
-        "irrelevant": overall_irrel,
-        "context_relevant_facts": overall_context_relevant,
+    return {
+        "score": avg_f1,
+        "supported": total_sup,
+        "not_supported": total_not,
+        "irrelevant": total_irrel,
         "precision": overall_precision,
-        "recall": overall_recall,
-        "total_claims": overall_total,
     }
-
-    return {"overall": overall, **({"per_generation": per_gen} if per_generation else {})}
