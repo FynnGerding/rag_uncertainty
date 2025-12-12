@@ -16,7 +16,11 @@ class LLM:
         
         # Load underlying HF components
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.hf_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+        self.hf_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+        ).to(device)
         
         # Wrap for Outlines
         self.model = models.Transformers(self.hf_model, self.tokenizer)

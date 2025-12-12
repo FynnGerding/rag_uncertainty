@@ -42,18 +42,18 @@ class EvalEngine:
     _instance = None
     _lock = threading.Lock()
 
-    def __new__(cls, llm=None, retriever=None, fact_gen=None):
+    def __new__(cls, llm=None, retriever=None, fact_gen=None, device=None):
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(EvalEngine, cls).__new__(cls)
-                cls._instance._initialize(llm, retriever, fact_gen)
+                cls._instance._initialize(llm, retriever, fact_gen, device)
         return cls._instance
 
-    def _initialize(self, llm, retriever, fact_gen):
+    def _initialize(self, llm, retriever, fact_gen, device):
         """
         Loads shared resources and initializes metric calculators.
         """
-        self.device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        self.device = device or ("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
         
         model_name = "microsoft/deberta-large-mnli"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
