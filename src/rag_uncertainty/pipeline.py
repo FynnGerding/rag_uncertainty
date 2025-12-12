@@ -4,7 +4,6 @@ from pathlib import Path
 import torch
 
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
-
 from rag_uncertainty.retrievers import build_wikipedia_retriever
 from rag_uncertainty.pipeline_utils import LLM, sample_generations
 from rag_uncertainty.eval import EvalEngine
@@ -76,23 +75,26 @@ def pipeline():
                 n=5
             )
 
-            logger.debug(f'Prompt used: {generations['prompt_used']}')
-            for i, answers in enumerate(generations['generated_texts']):
-                logger.debug(f"Answer {i}: {answers}")
+            logger.debug(f"Prompt used: {generations.get('prompt_used', 'N/A')}")
+            for k, ans in enumerate(generations['generated_texts']):
+                logger.debug(f"Answer {k}: {ans}.")
             
 
             logger.debug("Evaluating metrics (SE, SumEigen, RAFE, and CEM)")
             metrics = engine.evaluate(generations, question)
             logger.debug("Evaluating complete.")
             
-            se = metrics["semantic_entropy"]
-            su = metrics["sum_eigen"]
-            rafe_out = metrics["rafe"]
-            logger.debug("DONE")
+            se = metrics.get("semantic_entropy", {})
+            su = metrics.get("sum_eigen", {})
+            rafe_out = metrics.get("rafe", {})
+            
+            # Access the list of per-generation results from RAFE
+            rafe_gen_results = rafe_out.get("generations", [])
 
             # 3. Process Results
             for gen_id, answer in enumerate(generations["generated_texts"]):
-                gen_info = rafe_out[gen_id]
+                # Retrieve the matching RAFE result for this generation
+                gen_info = rafe_gen_results[gen_id]
                 details = gen_info["details"]
                 atomic_facts = [d["claim"] for d in details]
 
@@ -102,20 +104,30 @@ def pipeline():
                     "answer": answer,
                     "atomic_facts": atomic_facts,
                     "rafe_details": details,
+                    
                     # SE
-                    "semantic_entropy_global": se["semantic_entropy"],
-                    "semantic_entropy_per_gen": se["score_for_each_generation"][gen_id],
-                    "semantic_entropy_truth_value": se["truth_value"],
+                    "semantic_entropy_global": se.get("semantic_entropy"),
+                    "semantic_entropy_per_gen": se.get("score_for_each_generation", [])[gen_id] if "score_for_each_generation" in se else None,
+                    "semantic_entropy_truth_value": se.get("truth_value"),
+                    
                     # SU
-                    "sum_eigen": su["U_eigv"],
-                    "sum_eigen_truth_value": su["truth_value"],
-                    # RAFE
-                    "rafe_overall_score": rafe_out["score"],
+                    "sum_eigen": su.get("U_eigv"),
+                    "sum_eigen_truth_value": su.get("truth_value"),
+                    
+                    # RAFE (Overall)
+                    "rafe_overall_score": rafe_out.get("score"),
+                    "rafe_overall_precision": rafe_out.get("precision"),
+                    
+                    # RAFE (Per Generation)
                     "rafe_gen_score": gen_info["score"],
                     "rafe_gen_supported": gen_info["supported"],
                     "rafe_gen_not_supported": gen_info["not_supported"],
                     "rafe_gen_irrelevant": gen_info["irrelevant"],
                     "rafe_gen_total_claims": gen_info["total_claims"],
+                    
+                    # CEM Data (Our contribution)
+                    "cem_matrix": gen_info.get("cem_matrix"),
+                    "cem_evidence_scores": gen_info.get("cem_evidence_scores"),
                 }
 
                 results.append(record)

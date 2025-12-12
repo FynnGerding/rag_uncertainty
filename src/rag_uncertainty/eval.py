@@ -10,6 +10,7 @@ from rag_uncertainty.atomic_facts import AtomicFactGenerator
 from rag_uncertainty.retrievers import BM25Retriever
 from rag_uncertainty.rafe import rafe_factuality
 from rag_uncertainty.pipeline_utils import LLM
+from rag_uncertainty.retrievers import RetrievedChunk
 
 hf_logging.set_verbosity_error()
 
@@ -90,7 +91,7 @@ class EvalEngine:
     def _register_metric(self, name, calculator_instance):
         self.metrics[name] = calculator_instance
 
-    def evaluate(self, generations, question, metric_names=None):
+    def evaluate(self, generations: dict, question: str, metric_names=None):
         """
         Runs specified evaluation metrics on the provided generations.
 

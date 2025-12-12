@@ -26,6 +26,7 @@ dependencies = [
     "bm25s==0.2.14",
     "outlines==0.1.14",
     "orjson==3.11.5",
+    "pandas==2.3.3",
     "notebook"
 ]
 

@@ -163,7 +163,7 @@ def build_rag_prompt(question: str, retriever, k: int = 5) -> str:
         f"Question: {question}"
     )
 
-    return _qwen_prompt(system_msg, user_msg)
+    return _qwen_prompt(system_msg, user_msg), hits
 
 def sample_generations(
     llm: LLM,
@@ -177,7 +177,7 @@ def sample_generations(
     """
     Generates RAG answers using the LLM wrapper and Qwen formatting.
     """
-    prompt = build_rag_prompt(question, retriever, k=k_ctx)
+    prompt, hits = build_rag_prompt(question, retriever, k=k_ctx)
     
     generated_texts = []
     logprobs_per_gen = []
@@ -199,4 +199,5 @@ def sample_generations(
         "prompt_used": prompt,
         "generated_texts": generated_texts,
         "logprobs": logprobs_per_gen,
+        "context": hits,
     }

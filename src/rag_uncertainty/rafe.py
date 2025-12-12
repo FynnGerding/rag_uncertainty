@@ -2,11 +2,12 @@
 
 import logging
 from typing import Dict, Any, List, Literal, Optional
-import outlines
+import pandas as pd
 from pydantic import BaseModel, Field
 
 from rag_uncertainty.pipeline_utils import LLM
 from rag_uncertainty.atomic_facts import AtomicFactGenerator
+from rag_uncertainty.retrievers import RetrievedChunk
 
 SUPPORTED = "SUPPORTED"
 NOT_SUPPORTED = "NOT_SUPPORTED"
@@ -267,49 +268,224 @@ def _rate_fact(
     except Exception as e:
         logger.warning(f"Rating failed: {e}")
         return NOT_SUPPORTED
+    
+# MARK: CEM
 
-# MARK: RAFE loop
+class SupportVerdict(BaseModel):
+    reasoning: str = Field(..., description="Analyze strictly if the claim is a logical consequence of the evidence.")
+    label: Literal["SUPPORTED", "NOT_SUPPORTED"] = Field(..., description="SUPPORTED if entailed; otherwise NOT_SUPPORTED.")
+
+def _evaluate_support(claim: str, evidence: str, llm: LLM) -> int:
+    """
+    Determines if a piece of evidence logically entails a claim.
+
+    Args:
+        claim (str): The atomic fact to verify.
+        evidence (str): A document object with a .text attribute or a string.
+        llm (LLM): The language model instance.
+
+    Returns:
+        int: 1 if SUPPORTED, 0 if NOT_SUPPORTED.
+    """
+    evidence_text = evidence.strip()
+    
+    # 1. System Prompt: Enforce strict logical entailment
+    system_msg = (
+        "You are a logic engine. Determine if the 'CLAIM' can be deduced strictly from the provided 'EVIDENCE'.\n"
+        "Rules:\n"
+        "1. SUPPORTED: The evidence explicitly states the claim OR the claim is a direct logical conclusion of the evidence.\n"
+        "2. NOT_SUPPORTED: The evidence is irrelevant, contradicts the claim, or is too vague to prove the claim is true.\n"
+        "3. STRICT ISOLATION: Do not use your own knowledge. If the evidence doesn't say it, it's NOT_SUPPORTED."
+    )
+
+    # 2. Few-Shot Examples: Guide the model on deduction vs. hallucination
+    history = [
+        # Case 1: Direct Support (Paraphrase)
+        {
+            "role": "user",
+            "content": (
+                "CLAIM: The suspect fled on foot.\n"
+                "EVIDENCE: The police report states the individual ran away from the scene.\n"
+                "Task: Evaluate support."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "\'Ran away\' is synonymous with \'fled on foot\'. The claim follows directly.", "label": "SUPPORTED"}'
+        },
+        # Case 2: Insufficient Detail (The "Close but not quite" trap)
+        {
+            "role": "user",
+            "content": (
+                "CLAIM: Apple released the iPhone 15 in September.\n"
+                "EVIDENCE: Apple holds product launch events every September.\n"
+                "Task: Evaluate support."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "The evidence establishes a pattern (events in Sept) but does NOT confirm the specific release of the iPhone 15. It is an assumption, not a deduction.", "label": "NOT_SUPPORTED"}'
+        },
+        # Case 3: Logical Deduction (A implies B)
+        {
+            "role": "user",
+            "content": (
+                "CLAIM: The water is safe to drink.\n"
+                "EVIDENCE: The lab results show zero contaminants and neutral pH, meeting all safety standards.\n"
+                "Task: Evaluate support."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "If it meets all safety standards with zero contaminants, it logically follows that it is safe.", "label": "SUPPORTED"}'
+        },
+        # Case 4: Irrelevant / Hallucination Trap
+        {
+            "role": "user",
+            "content": (
+                "CLAIM: Paris is the capital of France.\n"
+                "EVIDENCE: Lyon is a major city in France known for its cuisine.\n"
+                "Task: Evaluate support."
+            )
+        },
+        {
+            "role": "assistant",
+            "content": '{"reasoning": "The claim is true in the real world, but the EVIDENCE only discusses Lyon. Based strictly on the evidence, the claim cannot be proven.", "label": "NOT_SUPPORTED"}'
+        }
+    ]
+
+    final_user_content = (
+        f"CLAIM: {claim}\n"
+        f"EVIDENCE: {evidence_text}\n"
+        "Task: Evaluate support."
+    )
+
+    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+    for msg in history:
+        full_prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+    full_prompt += f"<|im_start|>user\n{final_user_content}<|im_end|>\n<|im_start|>assistant\n"
+
+    try:
+        result, _ = llm.generate(
+            full_prompt, 
+            constraint=SupportVerdict,
+            temperature=0.0,
+            max_new_tokens=128
+        )
+        logger.debug(f"CEM evaluation for claim: '{claim}' given the evidence: '{evidence_text}' \nThe claim was rated '{result.label}', given the reasoning: '{result.reasoning}'")
+        return 1 if result.label == "SUPPORTED" else 0
+        
+    except Exception as e:
+        logger.warning(f"Support evaluation failed for claim '{claim}.': {e}")
+        return 0 # Default to Not Supported on error
+
+def calculate_cem_metrics(matrix_df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Computes uncertainty scores and evidence importance from the Claims-Evidence Matrix.
+
+    Args:
+        matrix_df (pd.DataFrame): Rows=Claims, Cols=Documents, Values=0/1.
+
+    Returns:
+        dict: Contains the raw matrix, claim uncertainty scores, and evidence importance scores.
+    """
+    if matrix_df.empty:
+        return {"matrix": {}, "claim_uncertainty": {}, "evidence_importance": {}}
+
+    # Uncertainty U(c) = 1 - (mean support across retrieval set)
+    support_ratios = matrix_df.mean(axis=1)
+    uncertainty_scores = 1 - support_ratios
+    
+    # Evidence Importance = mean support provided by a document across all claims
+    evidence_scores = matrix_df.mean(axis=0)
+
+    return {
+        "matrix": matrix_df.to_dict(),
+        "claim_uncertainty": uncertainty_scores.to_dict(),
+        "evidence_importance": evidence_scores.to_dict()
+    }
+
+# MARK: Main Pipeline
 
 def rafe_factuality(
         generations: dict, 
         question: str,
-        llm,
+        llm: LLM,
         *,
         retriever,
         fact_gen: AtomicFactGenerator,
         top_k: int = 5,
-        K: int = 10,  # F1@K parameter (human-preferred fact count)
+        K: int = 10,
     ) -> Dict[str, Any]:
+    """
+    Evaluates RAG generations using atomic fact decomposition, Google Search verification (SAFE),
+    and internal context consistency (CEM).
 
+    Args:
+        generations (dict): Dictionary containing 'generated_texts' and 'context'.
+        question (str): The user query.
+        llm (LLM): Language model for reasoning.
+        retriever: Search retriever for SAFE verification steps.
+        fact_gen (AtomicFactGenerator): Module to split text into atomic facts.
+        top_k (int): Number of search results for SAFE verification.
+        K (int): Hyperparameter for F1@K (ideal number of supported facts).
+
+    Returns:
+        dict: Aggregated scores (F1, Precision) and detailed per-generation results.
+    """
     f1_scores = []
     total_sup = 0
     total_not = 0
     total_irrel = 0
+    
+    generation_results = []
+
+    # Standardize context format for CEM
+    raw_context = generations.get("context", [])
+    formatted_context = []
+    for idx, doc in enumerate(raw_context):
+        txt = doc.text if hasattr(doc, "text") else str(doc)
+        formatted_context.append({"id": f"doc_{idx}", "text": txt})
 
     for answer in generations["generated_texts"]:
         atomic_pairs, _ = fact_gen.run(answer)
-        
-        # Flatten and deduplicate atomic facts
-        unique_facts = {f.strip() for _, facts in atomic_pairs for f in facts if f.strip()}
+        unique_facts = list({f.strip() for _, facts in atomic_pairs for f in facts if f.strip()})
         
         g_sup = 0
         g_not = 0
+        g_irrel = 0
+        
+        details = []
+        cem_data = {}
 
         for raw_claim in unique_facts:
-            # 1. Revise (Self-Containment)
+            # 1. Revise to be self-contained
             revised_claim = revise_fact(raw_claim, answer, llm)
             
-            # 2. Check Relevance (Verifiability)
+            # 2. Check Relevance (Filter meta-talk)
             if check_relevance(question, revised_claim, answer, llm) == IRRELEVANT:
-                total_irrel += 1
+                g_irrel += 1
+                details.append({
+                    "claim": revised_claim, 
+                    "label": IRRELEVANT, 
+                    "evidence": [],
+                    "uncertainty_score": None
+                })
                 continue
 
-            # 3. Retrieve Evidence (Query Generation)
+            # 3. Calculate CEM (Context Entailment)
+            row_scores = {}
+            for doc in formatted_context:
+                score = _evaluate_support(revised_claim, doc["text"], llm)
+                row_scores[doc["id"]] = score
+            cem_data[revised_claim] = row_scores
+
+            # 4. Retrieve External Evidence (SAFE)
             _, evidence = retrieve_evidence(
                 revised_claim, llm=llm, retriever=retriever, top_k=top_k
             )
 
-            # 4. Rate Fact
+            # 5. Rate Fact (SAFE)
             label = _rate_fact(
                 claim=revised_claim,
                 question=question,
@@ -322,31 +498,53 @@ def rafe_factuality(
                 g_sup += 1
             else:
                 g_not += 1
+            
+            details.append({
+                "claim": revised_claim,
+                "label": label,
+                "evidence": evidence,
+                "uncertainty_score": 0.0 # Placeholder, updated below
+            })
 
-        # Calculate F1@K for this generation
-        # Precision: Proportion of verified facts among all relevant facts generated
-        precision = g_sup / (g_sup + g_not + 1e-9)
-        
-        # Recall: Proportion of supported facts against ideal length K
-        recall = min(g_sup / K, 1.0)
-        
-        if (precision + recall) == 0:
-            f1 = 0.0
+        # Calculate CEM metrics for this generation
+        if cem_data:
+            df_cem = pd.DataFrame.from_dict(cem_data, orient='index')
+            cem_metrics = calculate_cem_metrics(df_cem)
+            
+            u_scores = cem_metrics["claim_uncertainty"]
+            for d in details:
+                if d["claim"] in u_scores:
+                    d["uncertainty_score"] = u_scores[d["claim"]]
         else:
-            f1 = 2 * (precision * recall) / (precision + recall)
+            cem_metrics = {"matrix": {}, "claim_uncertainty": {}, "evidence_importance": {}}
+
+        # Calculate F1@K
+        precision = g_sup / (g_sup + g_not + 1e-9)
+        recall = min(g_sup / K, 1.0)
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
             
         f1_scores.append(f1)
         total_sup += g_sup
         total_not += g_not
+        total_irrel += g_irrel
+        
+        generation_results.append({
+            "score": f1,
+            "supported": g_sup,
+            "not_supported": g_not,
+            "irrelevant": g_irrel,
+            "total_claims": g_sup + g_not + g_irrel,
+            "details": details,
+            "cem_matrix": cem_metrics["matrix"],
+            "cem_evidence_scores": cem_metrics["evidence_importance"]
+        })
 
-    # Aggregate Metrics
     avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
     overall_precision = total_sup / (total_sup + total_not + 1e-9)
 
     return {
         "score": avg_f1,
-        "supported": total_sup,
-        "not_supported": total_not,
-        "irrelevant": total_irrel,
         "precision": overall_precision,
+        "supported": total_sup,
+        "generations": generation_results
     }
