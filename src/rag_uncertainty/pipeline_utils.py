@@ -138,11 +138,10 @@ def build_rag_prompt(question: str, retriever, k: int = 5) -> str:
     """
     Constructs a Qwen 2.5 formatted RAG prompt.
     """
-    # 1. Search
-    #    The retriever now returns RetrievedChunk objects with valid .text
+    # Search
     hits: List[RetrievedChunk] = retriever.search(question, top_k=k)
     
-    # 2. Format context blocks
+    # Construct context
     context_blocks = []
     for i, hit in enumerate(hits, 1):
         # Access the .text attribute directly from the dataclass
@@ -151,11 +150,17 @@ def build_rag_prompt(question: str, retriever, k: int = 5) -> str:
     
     context_str = "\n\n".join(context_blocks) if context_blocks else "(No relevant context found)"
 
-    # 3. Construct Qwen Prompt
+    # Prompt
     system_msg = (
-        "You are a precise research assistant. "
-        "Answer the user's question based strictly on the provided context blocks. "
-        "If the answer is not contained in the context, explicitly state that."
+        "You are an expert research writer. Your task is to write a comprehensive, "
+        "detailed answer to the user's question using the provided documents.\n"
+        "Guidelines:\n"
+        "1. Synthesize information from multiple context blocks into a coherent narrative.\n"
+        "2. Prioritize length and detail. Explain the 'who, what, where, when, and why' based on the text.\n"
+        "3. If the context is partial or fragmented, construct the best possible answer using the available "
+        "evidence, rather than refusing to answer. Connect the dots logically.\n"
+        "4. Strict Grounding: Do not hallucinate external details. If a specific detail is missing, "
+        "omit it or state that the documents do not specify it, but continue the narrative."
     )
     
     user_msg = (
