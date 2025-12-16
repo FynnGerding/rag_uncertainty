@@ -72,4 +72,4 @@ The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix 
 
 ## LLM
 
-For all experiments we use [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
+For all experiments we use [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) and the [outlines](https://dottxt-ai.github.io/outlines/latest/) library for structured outputs.
