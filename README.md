@@ -1,5 +1,7 @@
 # Uncertainty Estimation in Long-Form RAG
 
+Reliable uncertainty estimation matters in long-form Retrieval-Augmented Generation (RAG) because factual errors often come from *grounding failures* (claims not entailed by retrieved evidence), not from surface-level generation instability. This repo focuses on *epistemic* uncertainty under retrieval: how fragile a claim is with respect to the available context.
+
 ## Installation
 
 To get started, clone the repository, set up a virtual environment, and install the project dependencies:
@@ -17,51 +19,57 @@ make run
 ```
 
 ## Novelty: Claim-Evidence Matrix (CEM)
-Building on [**Claim-Level Uncertainty (CLUE)**](https://arxiv.org/pdf/2409.03021) and [**Graph-based Uncertainty Metrics**](https://neurips.cc/virtual/2024/poster/94679), **CEM** introduces a RAG-specific framework to quantify epistemic fragility. It replaces expensive stochastic consistency checks with a single-pass assessment of evidence grounding.
+
+Claim-Evidence Matrix (**CEM**) is a RAG-specific framework to quantify *epistemic fragility* at the claim level. Unlike sampling-based consistency metrics, it directly measures whether atomic claims are *entailed by retrieved evidence*, targeting the “confident hallucination” regime where a model is stable but wrong.
 
 #### Key Advantages
-- Grounding over Consistency: Verifies if claims are actively entailed by retrieved documents, independent of model confidence.
-- Efficiency: Reduces compute by requiring only one generation pass ($1$ vs $N$) via parallelizable support checks.
-- Retrieval-Awareness: Distinguishes between robustly supported claims and those hinging on sparse evidence.
+
+* Grounding over Consistency: tests whether claims are supported by retrieved documents, independent of model self-confidence.
+* Efficiency: replaces $N$ full re-generations with a single generation pass plus parallelizable support checks.
+* Retrieval-Awareness: highlights brittle claims that hinge on sparse evidence, and robust claims with redundant support.
+
 #### Formulation
-We decompose response $R$ into atomic claims $C$ and construct a binary matrix $M$ where $M_{ij}=1$ if document $d_j$ supports claim $c_i$. Uncertainty is defined as the inverse of evidence redundancy:
+
+We decompose a response $R$ into atomic claims $C$ and construct a binary matrix $M$ where $M_{ij}=1$ if document chunk $d_j$ supports claim $c_i$. Claim uncertainty is defined as the inverse of evidence redundancy:
 
 $$U(c_i) = 1 - \frac{1}{k} \sum_{j=1}^k M_{ij}$$
 
-Here, $U \approx 0$ implies robust support across the context window, while high $U$ indicates scarce support for a claim.
+Here, $U \approx 0$ indicates redundant support across retrieved context, while high $U$ indicates weak or missing support.
+
+#### CEM example visualization (RAFE + CEM)
+
+![RAFE + CEM matrix example](./figures/CEM_matrix_berlin_wall.png)
+
+## Long-Form Factuality in RAG: RAFE (vs SAFE)
+
+We additionally propose **RAFE** (Retrieval-Augmented Factuality Estimation). Adapting DeepMind’s SAFE [(arXiv)](https://arxiv.org/pdf/2403.18802), RAFE replaces open-web search with *local context verification*, aligning evaluation with a closed-world RAG setting. Our code is adapted from DeepMind’s SAFE implementation [(GitHub)](https://github.com/google-deepmind/long-form-factuality). We use the [outlines library](https://github.com/dottxt-ai/outlines) to enforce structured atomic facts and strict `SUPPORTED` / `NOT_SUPPORTED` and `RELEVANT` / `IRRELEVANT` labels.
 
 ## Uncertainty Estimation Methods
 
-Our implementatoins are based on **TruthTorchLM** [(GitHub)](https://github.com/lexin-zhou/TruthTorchLM)
+Our implementations are based on **TruthTorchLM** [(GitHub)](https://github.com/lexin-zhou/TruthTorchLM).
 
 ### Semantic Entropy (White-box)
 
 **Paper:** Semantic Uncertainty [(arXiv)](https://arxiv.org/abs/2302.09664)
 
-This method addresses the issue where standard entropy metrics overestimate uncertainty by treating semantically equivalent sentences (e.g., "Paris is the capital" vs. "The capital is Paris") as distinct outcomes.
-* **Mechanism:** It generates multiple answers and clusters them by meaning using a bidirectional entailment check (NLI).
-* **Metric:** It sums the probabilities of sequences within each cluster to compute the entropy over **meanings** rather than tokens, requiring access to model logits.
+Standard token entropy can overestimate uncertainty by treating semantically equivalent strings as distinct outcomes.
+
+* Mechanism: sample multiple answers and cluster by meaning via bidirectional entailment (NLI).
+* Metric: compute entropy over *semantic clusters* (requires access to logits or sequence probabilities).
 
 ### SumEigen (Black-box)
 
 **Paper:** Generating with Confidence [(arXiv)](https://arxiv.org/abs/2305.19187)
 
-Designed for closed-source models where token logits are unavailable, this approach quantifies the "semantic dispersion" of generated responses.
-* **Mechanism:** It generates multiple responses and computes a pairwise similarity matrix (using NLI entailment scores) to construct a graph Laplacian.
-* **Metric:** The uncertainty score ($U_{EigV}$) is the sum of the Laplacian's eigenvalues, which serves as a proxy for the number of distinct semantic clusters in the output.
+For closed-source models without logits, uncertainty is approximated via dispersion in semantic space.
 
-## Long-Form Factuality in RAG: RAFE (vs SAFE)
-
-We additionally propose RAFE (Retrieval-Augmented Factuality Estimation). Adapting Google DeepMind's SAFE (Search-Augmented Factuality Estimation) [(arxiv)](https://arxiv.org/pdf/2403.18802), we replace external Google Search steps with local context verification. Our code is addapted from the DeepMind's SAFE implementation [(GitHub)](https://github.com/google-deepmind/long-form-factuality) to measure factuality using retrieved evidence (RAG) rather than open web search. We utilize the [outlines library](https://github.com/dottxt-ai/outlines)  to enforce sensible atomic facts and `SUPPORTED` / `NOT_SUPPORTED` and `RELEVANT` / `IRRELEVANT` lables.
+* Mechanism: sample multiple responses, build a similarity graph (e.g., NLI-based), form a Laplacian.
+* Metric: uncertainty is the sum of Laplacian eigenvalues, proxying the number of distinct semantic modes.
 
 ## Data Source
 
-The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix E.6** of the paper [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
+The questions in `src/rag_uncertainty/questions.json` are taken from **Appendix E.6** of [Long-form factuality in large language models](https://arxiv.org/pdf/2403.18802).
 
 ## LLM
 
-For all expeiments we use [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
-
-## Repo Layout
-
-Add later...
+For all experiments we use [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
