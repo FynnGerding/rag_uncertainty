@@ -36,7 +36,7 @@ $$U(c_i) = 1 - \frac{1}{k} \sum_{j=1}^k M_{ij}$$
 
 Here, $U \approx 0$ indicates redundant support across retrieved context, while high $U$ indicates weak or missing support.
 
-#### CEM example visualization
+#### CEM Example Visualization
 
 ![RAFE + CEM matrix example](./figures/CEM_matrix_berlin_wall.png)
 
